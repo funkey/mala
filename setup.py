@@ -12,7 +12,4 @@ setup(
             'mala',
             'mala.networks',
         ],
-        install_requires=[
-            "tensorflow",
-        ]
 )
