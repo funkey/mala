@@ -102,9 +102,9 @@ def crop_zyx(fmaps_in, shape):
     offset = [
         0, # batch
         0, # channel
-        (shape[2] - in_shape[2])//2, # z
-        (shape[3] - in_shape[3])//2, # y
-        (shape[4] - in_shape[4])//2, # x
+        (in_shape[2] - shape[2])//2, # z
+        (in_shape[3] - shape[3])//2, # y
+        (in_shape[4] - shape[4])//2, # x
     ]
     size = [
         in_shape[0],
