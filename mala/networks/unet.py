@@ -41,7 +41,8 @@ def conv_pass(
     '''
 
     fmaps = fmaps_in
-    activation = getattr(tf.nn, activation)
+    if activation is not None:
+        activation = getattr(tf.nn, activation)
 
     for i in range(num_repetitions):
         fmaps = tf.layers.conv3d(
@@ -69,7 +70,8 @@ def downsample(fmaps_in, factors, name='down'):
 
 def upsample(fmaps_in, factors, num_fmaps, activation='relu', name='up'):
 
-    activation = getattr(tf.nn, activation)
+    if activation is not None:
+        activation = getattr(tf.nn, activation)
 
     fmaps = tf.layers.conv3d_transpose(
         fmaps_in,
