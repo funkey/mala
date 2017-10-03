@@ -10,6 +10,7 @@ setup(
         license='MIT',
         packages=[
             'mala',
+            'mala.losses',
             'mala.networks',
         ],
 )
