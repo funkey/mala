@@ -17,9 +17,13 @@ class MalisWeights(object):
         weights_neg = self.malis_pass(affs, gt_affs, gt_seg, pos=0)
         weights_pos = self.malis_pass(affs, gt_affs, gt_seg, pos=1)
 
-        return weights_neg + weights_pos
+        return (weights_neg, weights_pos)
 
     def malis_pass(self, affs, gt_affs, gt_seg, pos):
+
+        # in the positive pass (pos==1), we set boundary edges (gt_aff==0) to their true values
+        # in the negative pass (pos==0), we set non-boundary edges (gt_aff==1) to their true values
+        affs[gt_affs == (1-pos)] = 1-pos
 
         weights = malis.malis_loss_weights(
             gt_seg.astype(np.uint64).flatten(),
@@ -30,9 +34,6 @@ class MalisWeights(object):
 
         weights = weights.reshape((-1,) + tuple(self.output_shape))
         assert weights.shape[0] == len(self.neighborhood)
-
-        # '1-pos' samples don't contribute in the 'pos' pass
-        weights[gt_affs == (1 - pos)] = 0
 
         # normalize
         weights = weights.astype(np.float32)
@@ -53,18 +54,19 @@ def malis_weights_op(affs, gt_affs, gt_seg, neighborhood, name=None):
     malis_functor = lambda affs, gt_affs, gt_seg, mw=malis_weights: \
         mw.get_edge_weights(affs, gt_affs, gt_seg)
 
-    weights = tf.py_func(
+    weights_neg, weights_pos = tf.py_func(
         malis_functor,
         [affs, gt_affs, gt_seg],
         [tf.float32],
         name=name)
 
-    return weights[0]
+    return (weights_neg, weights_pos)
 
 def malis_loss_op(affs, gt_affs, gt_seg, neighborhood, name=None):
     '''Returns a tensorflow op to compute the MALIS loss.'''
 
-    weights = malis_weights_op(affs, gt_affs, gt_seg, neighborhood, name)
-    edge_loss = tf.square(tf.subtract(gt_affs, affs))
+    weights_neg, weights_pos = malis_weights_op(affs, gt_affs, gt_seg, neighborhood, name)
+    edge_loss_neg = tf.multiply(weights_neg,tf.square(tf.subtract(affs, 0)))
+    edge_loss_pos = tf.multiply(weights_pos,tf.square(tf.subtract(affs, 1)))
 
-    return tf.reduce_sum(tf.multiply(weights, edge_loss))
+    return tf.reduce_sum(tf.add(edge_loss_neg,edge_loss_pos))
