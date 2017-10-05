@@ -21,11 +21,17 @@ class MalisWeights(object):
 
     def malis_pass(self, affs, gt_affs, gt_seg, pos):
 
+        # create a copy of the affinities and change them, such that in the
+        #   positive pass (pos == 1): affs[gt_affs == 0] = 0
+        #   negative pass (pos == 0): affs[gt_affs == 1] = 1
+        pass_affs = np.copy(affs)
+        pass_affs[gt_affs == (1 - pos)] = (1 - pos)
+
         weights = malis.malis_loss_weights(
             gt_seg.astype(np.uint64).flatten(),
             self.edge_list[0].flatten(),
             self.edge_list[1].flatten(),
-            affs.astype(np.float32).flatten(),
+            pass_affs.astype(np.float32).flatten(),
             pos)
 
         weights = weights.reshape((-1,) + tuple(self.output_shape))
