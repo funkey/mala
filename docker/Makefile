@@ -6,6 +6,7 @@ default:
 	-docker rmi -f $(TAG)
 	-rm -rf mala
 	cp -r ../mala .
+	cp ../setup.py .
 	docker build -t $(TAG) .
 
 push: default
