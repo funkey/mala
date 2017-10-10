@@ -49,7 +49,7 @@ def get_um_loss(mst, gt_seg, alpha):
 class UmLoss:
     '''Wrapper class to avoid re-computation of the UM loss between forward and
     backward passes. This class will store the results of the forward pass, and
-    reuse it in the negative pass.
+    reuse it in the backward pass.
     '''
 
     def __init__(self):
@@ -140,7 +140,7 @@ def ultrametric_loss_op(
 
     emst = get_emst_op(embedding)
 
-    # 4. Compute the squared lengths of EMST edges
+    # 4. Compute the lengths of EMST edges
 
     edges_u = tf.gather(embedding, tf.cast(emst[:,0], tf.int64))
     edges_v = tf.gather(embedding, tf.cast(emst[:,1], tf.int64))
