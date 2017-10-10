@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import mala
+from .py_func_gradient import py_func_gradient
 
 def get_emst(embedding):
 
@@ -15,12 +16,13 @@ def get_emst_op(embedding, name=None):
         name=name)[0]
 
 def get_um_loss(mst, gt_seg, alpha):
-    '''Compute the ultra-metric scores given an MST and segmentation.
+    '''Compute the ultra-metric loss and gradient given an MST and
+    segmentation.
 
     Args:
 
-        mst (Tensor, shape ``(2, n-1)``): u and v indices of edges of the MST
-            spanning n nodes.
+        mst (Tensor, shape ``(3, n-1)``): u, v indices and distance of edges of
+            the MST spanning n nodes.
 
         gt_seg (Tensor, arbitrary shape): The label of each node. Will be
             flattened. The indices in mst should be valid indices into this
@@ -30,17 +32,13 @@ def get_um_loss(mst, gt_seg, alpha):
 
         A tuple::
 
-            (num_pairs_pos, scores_a, scores_b, scores_c)
+            (loss, gradients, num_pairs_pos, num_pairs_neg)
 
-        Eeach entry is a tensor of shape ``(n-1,)``, corresponding to the edges
-        in the MST.
-
-        These are the scores that need to be multiplied with their respective
-        edge coefficients, along with the number of times that a positive pair
-        has an MST edge as minimax edge.
-
-        Although derived from the distances, the numbers returned here have a
-        zero-gradient wrt. the distance.
+        Except for ``loss``, each entry is a tensor of shape ``(n-1,)``,
+        corresponding to the edges in the MST. ``gradients`` contains the
+        gradients on the edge distances. ``num_pairs_pos`` and
+        ``num_pairs_neg`` the number of positive and negative pairs that share
+        an edge.
     '''
 
     return mala.um_loss(
@@ -48,21 +46,72 @@ def get_um_loss(mst, gt_seg, alpha):
         gt_seg.flatten(),
         alpha)
 
-def get_um_loss_op(mst, gt_seg, alpha, name=None):
+class UmLoss:
+    '''Wrapper class to avoid re-computation of the UM loss between forward and
+    backward passes. This class will store the results of the forward pass, and
+    reuse it in the negative pass.
+    '''
 
-    return tf.py_func(
-        get_um_loss,
-        [mst, gt_seg, alpha],
-        [tf.float64, tf.float64, tf.int64, tf.int64],
-        name=name)
+    def __init__(self):
+        self.__loss = None
+        self.__gradient = None
+
+    def loss(self, mst, dist, gt_seg, alpha):
+
+        # We don't use 'dist' here, it is already contained in the mst. It is
+        # passed here just so that tensorflow knows there is dependecy to the
+        # ouput.
+
+        print("Calling UmLoss::loss")
+        (
+            self.__loss,
+            self.__gradient,
+            self.__num_pairs_pos,
+            self.__num_pairs_neg) = get_um_loss(mst, gt_seg, alpha)
+
+        # ensure that every float tf sees is float32
+        self.__loss = np.float32(self.__loss)
+        self.__gradient = self.__gradient.astype(np.float32)
+
+        return (
+            self.__loss,
+            self.__num_pairs_pos,
+            self.__num_pairs_neg)
+
+    def gradient(self, op, dloss, dpairs_pos, dpairs_neg):
+
+        print("Calling UmLoss::gradient")
+        # the loss has only a gradient wrt. the distance
+        return (None, tf.convert_to_tensor(self.__gradient)*dloss, None, None)
 
 def ultrametric_loss_op(
         embedding,
         gt_seg,
         alpha=0.1,
-        name=None,
-        add_coordinates=True):
-    '''Returns a tensorflow op to compute the ultra-metric loss.'''
+        add_coordinates=True,
+        name=None):
+    '''Returns a tensorflow op to compute the ultra-metric quadrupel loss::
+
+        L = sum_p sum_n max(0, d(n) - d(p) + alpha)^2
+
+    where ``p`` and ``n`` are pairs points with same and different labels,
+    respectively, and ``d(.)`` the distance between the points.
+
+    Args:
+
+        embedding (Tensor, shape ``(k, d, h, w)``): A k-dimensional feature
+            embedding of points in 3D.
+
+        gt_seg (Tensor, shape ``(d, h, w)``): The ground-truth labels of the
+            points.
+
+        alpha (float): The margin term of the quadrupel loss.
+
+        add_coordinates(bool): If ``True``, add the ``(z, y, x)`` coordinates
+            of the points to the embedding.
+
+        name (string): An optional name for the operator.
+    '''
 
     alpha = tf.constant(alpha)
 
@@ -100,7 +149,12 @@ def ultrametric_loss_op(
 
     # 5. Compute the UM loss
 
-    loss, gradients, _, _ = get_um_loss_op(emst, gt_seg, alpha)
+    um_loss = UmLoss()
+    loss = py_func_gradient(
+        lambda m, d, g, a, l=um_loss: l.loss(m, d, g, a),
+        [emst, dist, gt_seg, alpha],
+        [tf.float32, tf.int64, tf.int64],
+        gradient=lambda o, lo, p, n, l=um_loss: l.gradient(o, lo, p, n),
+        name=name)[0]
 
-    return (loss, embedding, emst, edges_u, edges_v, dist_squared, dist,
-            gradients)
+    return (loss, emst, edges_u, edges_v, dist)
