@@ -43,7 +43,7 @@ setup(
         ext_modules = [
             Extension(
                 "mala.wrappers",
-                ["mala/wrappers.pyx", "mala/emst.cpp", "mala/um_scores.cpp"],
+                ["mala/wrappers.pyx", "mala/emst.cpp", "mala/um_loss.cpp"],
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 language='c++',

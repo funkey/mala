@@ -9,19 +9,15 @@ cdef extern from "emst.h":
         const double* points,
         double* mst);
 
-cdef extern from "um_scores.h":
-    void c_um_scores(
+cdef extern from "um_loss.h":
+    double c_um_loss_gradient(
         int numNodes,
-        const double* emst,
-        const float* dist,
-        const float* distSquared,
+        const double* mst,
         const int64_t* gtSeg,
-        float alpha,
-        float* numPairsPos,
-        float* numPairsNeg,
-        float* scoresA,
-        float* scoresB,
-        float* scoresC);
+        double alpha,
+        double* gradients,
+        int64_t* numPairsPos,
+        int64_t* numPairsNeg);
 
 def emst(np.ndarray[double, ndim=2] points):
 
@@ -44,69 +40,49 @@ def emst(np.ndarray[double, ndim=2] points):
 
     return output
 
-def um_scores(
-    np.ndarray[double, ndim=2] emst,
-    np.ndarray[float, ndim=1] dist,
-    np.ndarray[float, ndim=1] dist_squared,
+def um_loss(
+    np.ndarray[double, ndim=2] mst,
     np.ndarray[int64_t, ndim=1] gt_seg,
-    float alpha):
+    double alpha):
 
     cdef int num_points = gt_seg.shape[0]
-    cdef int num_edges = emst.shape[0]
+    cdef int num_edges = mst.shape[0]
 
     assert num_points == num_edges + 1, ("Number of edges in MST is unequal "
                                          "number of points in segmentation "
                                          "minus one.")
 
-    assert emst.shape[1] == 3, "emst not given as rows of [u, v, dist]"
+    assert mst.shape[1] == 3, "mst not given as rows of [u, v, dist]"
 
     # the C++ part assumes contiguous memory, make sure we have it (and do 
     # nothing, if we do)
-    if not emst.flags['C_CONTIGUOUS']:
-        print("Creating memory-contiguous emst arrray (avoid this by "
+    if not mst.flags['C_CONTIGUOUS']:
+        print("Creating memory-contiguous mst arrray (avoid this by "
               "passing C_CONTIGUOUS arrays)")
-        emst = np.ascontiguousarray(emst)
-    if not dist.flags['C_CONTIGUOUS']:
-        print("Creating memory-contiguous dist arrray (avoid this by "
-              "passing C_CONTIGUOUS arrays)")
-        dist = np.ascontiguousarray(dist)
-    if not dist_squared.flags['C_CONTIGUOUS']:
-        print("Creating memory-contiguous dist_squared arrray (avoid this by "
-              "passing C_CONTIGUOUS arrays)")
-        dist_squared = np.ascontiguousarray(dist_squared)
+        mst = np.ascontiguousarray(mst)
     if not gt_seg.flags['C_CONTIGUOUS']:
         print("Creating memory-contiguous gt_seg arrray (avoid this by "
               "passing C_CONTIGUOUS arrays)")
         gt_seg = np.ascontiguousarray(gt_seg)
 
     # prepare output arrays
-    cdef np.ndarray[float, ndim=1] num_pairs_pos = np.zeros(
+    cdef np.ndarray[double, ndim=1] gradients = np.zeros(
             (num_edges,),
-            dtype=np.float32)
-    cdef np.ndarray[float, ndim=1] num_pairs_neg = np.zeros(
+            dtype=np.float64)
+    cdef np.ndarray[int64_t, ndim=1] num_pairs_neg = np.zeros(
             (num_edges,),
-            dtype=np.float32)
-    cdef np.ndarray[float, ndim=1] scores_a = np.zeros(
+            dtype=np.int64)
+    cdef np.ndarray[int64_t, ndim=1] num_pairs_pos = np.zeros(
             (num_edges,),
-            dtype=np.float32)
-    cdef np.ndarray[float, ndim=1] scores_b = np.zeros(
-            (num_edges,),
-            dtype=np.float32)
-    cdef np.ndarray[float, ndim=1] scores_c = np.zeros(
-            (num_edges,),
-            dtype=np.float32)
+            dtype=np.int64)
 
-    c_um_scores(
+    cdef double loss = c_um_loss_gradient(
         num_points,
-        &emst[0, 0],
-        &dist[0],
-        &dist_squared[0],
+        &mst[0, 0],
         &gt_seg[0],
         alpha,
+        &gradients[0],
         &num_pairs_pos[0],
-        &num_pairs_neg[0],
-        &scores_a[0],
-        &scores_b[0],
-        &scores_c[0])
+        &num_pairs_neg[0])
 
-    return (num_pairs_pos, num_pairs_neg, scores_a, scores_b, scores_c)
+    return (loss, gradients, num_pairs_pos, num_pairs_neg)
