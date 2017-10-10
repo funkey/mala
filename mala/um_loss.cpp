@@ -32,6 +32,9 @@ double c_um_loss_gradient(
 
 	// 1. Compute number of positive an negative pairs per edge.
 
+	int64_t totalNumPairsPos = 0;
+	int64_t totalNumPairsNeg = 0;
+
 	for (int i = 0; i < numNodes - 1; i++) {
 
 		int64_t u = mst[i*3];
@@ -73,6 +76,9 @@ double c_um_loss_gradient(
 			overlaps[clusterU][labelV] += countV;
 		}
 		overlaps[clusterV].clear();
+
+		totalNumPairsPos += numPairsPos[i];
+		totalNumPairsNeg += numPairsNeg[i];
 	}
 
 	// 2. Compute loss and first part of gradient
@@ -127,6 +133,7 @@ double c_um_loss_gradient(
 				scoresC[i]
 			);
 	}
+	loss /= (totalNumPairsPos*totalNumPairsNeg);
 
 	// for the gradient, we also need the scores summed downwards
 	double scoreD = 0;
@@ -175,6 +182,8 @@ double c_um_loss_gradient(
 				(alpha - distance)*(scoresD[i] - numPairsPos[i]) +
 				(scoresE[i] - distance*numPairsPos[i])
 			);
+
+		gradients[i] /= (totalNumPairsPos*totalNumPairsNeg);
 	}
 
 	return loss;
