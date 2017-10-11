@@ -16,8 +16,8 @@ cdef extern from "um_loss.h":
         const int64_t* gtSeg,
         double alpha,
         double* gradients,
-        int64_t* numPairsPos,
-        int64_t* numPairsNeg);
+        double* numPairsPos,
+        double* numPairsNeg);
 
 def emst(np.ndarray[double, ndim=2] points):
 
@@ -69,12 +69,12 @@ def um_loss(
     cdef np.ndarray[double, ndim=1] gradients = np.zeros(
             (num_edges,),
             dtype=np.float64)
-    cdef np.ndarray[int64_t, ndim=1] num_pairs_neg = np.zeros(
+    cdef np.ndarray[double, ndim=1] num_pairs_neg = np.zeros(
             (num_edges,),
-            dtype=np.int64)
-    cdef np.ndarray[int64_t, ndim=1] num_pairs_pos = np.zeros(
+            dtype=np.float64)
+    cdef np.ndarray[double, ndim=1] num_pairs_pos = np.zeros(
             (num_edges,),
-            dtype=np.int64)
+            dtype=np.float64)
 
     cdef double loss = c_um_loss_gradient(
         num_points,

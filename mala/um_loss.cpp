@@ -9,8 +9,8 @@ double c_um_loss_gradient(
 	const int64_t* gtSeg,
 	double alpha,
 	double* gradients,
-	int64_t* numPairsPos,
-	int64_t* numPairsNeg) {
+	double* numPairsPos,
+	double* numPairsNeg) {
 
 	// labels and counts that each cluster overlaps with in gtSeg
 	std::vector<std::map<int64_t, int>> overlaps(numNodes);
@@ -32,8 +32,8 @@ double c_um_loss_gradient(
 
 	// 1. Compute number of positive an negative pairs per edge.
 
-	int64_t totalNumPairsPos = 0;
-	int64_t totalNumPairsNeg = 0;
+	double totalNumPairsPos = 0;
+	double totalNumPairsNeg = 0;
 
 	for (int i = 0; i < numNodes - 1; i++) {
 
@@ -79,6 +79,13 @@ double c_um_loss_gradient(
 
 		totalNumPairsPos += numPairsPos[i];
 		totalNumPairsNeg += numPairsNeg[i];
+	}
+
+	// normalize number of pairs, this normalizes the loss and gradient
+	for (int i = 0; i < numNodes - 1; i++) {
+
+		numPairsPos[i] /= totalNumPairsPos;
+		numPairsNeg[i] /= totalNumPairsNeg;
 	}
 
 	// 2. Compute loss and first part of gradient
@@ -133,7 +140,6 @@ double c_um_loss_gradient(
 				scoresC[i]
 			);
 	}
-	loss /= (totalNumPairsPos*totalNumPairsNeg);
 
 	// for the gradient, we also need the scores summed downwards
 	double scoreD = 0;
@@ -182,8 +188,6 @@ double c_um_loss_gradient(
 				(alpha - distance)*(scoresD[i] - numPairsPos[i]) +
 				(scoresE[i] - distance*numPairsPos[i])
 			);
-
-		gradients[i] /= (totalNumPairsPos*totalNumPairsNeg);
 	}
 
 	return loss;

@@ -70,6 +70,8 @@ class UmLoss:
 
         # ensure that every float tf sees is float32
         self.__loss = np.float32(self.__loss)
+        self.__num_pairs_pos = np.float32(self.__num_pairs_pos)
+        self.__num_pairs_neg = np.float32(self.__num_pairs_neg)
         self.__gradient = self.__gradient.astype(np.float32)
 
         return (
@@ -160,7 +162,7 @@ def ultrametric_loss_op(
     loss = py_func_gradient(
         lambda m, d, g, a, l=um_loss: l.loss(m, d, g, a),
         [emst, dist, gt_seg, alpha],
-        [tf.float32, tf.int64, tf.int64],
+        [tf.float32, tf.float32, tf.float32],
         gradient_op=lambda o, lo, p, n, l=um_loss: l.gradient_op(o, lo, p, n),
         name=name,
         stateful=False)[0]
