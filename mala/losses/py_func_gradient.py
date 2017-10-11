@@ -1,10 +1,10 @@
 import tensorflow as tf
 
-def py_func_gradient(func, inp, Tout, stateful=True, name=None, gradient=None):
+def py_func_gradient(func, inp, Tout, stateful=True, name=None, gradient_op=None):
 
     pyfunc_name = 'PyFuncGrad' + str(name)
 
-    tf.RegisterGradient(pyfunc_name)(gradient)
+    tf.RegisterGradient(pyfunc_name)(gradient_op)
     g = tf.get_default_graph()
 
     with g.gradient_override_map({

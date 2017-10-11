@@ -13,7 +13,8 @@ def get_emst_op(embedding, name=None):
         get_emst,
         [embedding],
         [tf.float64],
-        name=name)[0]
+        name=name,
+        stateful=False)[0]
 
 def get_um_loss(mst, gt_seg, alpha):
     '''Compute the ultra-metric loss and gradient given an MST and
@@ -61,8 +62,6 @@ class UmLoss:
         # We don't use 'dist' here, it is already contained in the mst. It is
         # passed here just so that tensorflow knows there is dependecy to the
         # ouput.
-
-        print("Calling UmLoss::loss")
         (
             self.__loss,
             self.__gradient,
@@ -78,11 +77,19 @@ class UmLoss:
             self.__num_pairs_pos,
             self.__num_pairs_neg)
 
-    def gradient(self, op, dloss, dpairs_pos, dpairs_neg):
+    def gradient(self, mst, dist, gt_seg, alpha):
 
-        print("Calling UmLoss::gradient")
-        # the loss has only a gradient wrt. the distance
-        return (None, tf.convert_to_tensor(self.__gradient)*dloss, None, None)
+        return get_um_loss(mst, gt_seg, alpha)[1].astype(np.float32)
+
+    def gradient_op(self, op, dloss, dpairs_pos, dpairs_neg):
+
+        g = tf.py_func(
+            lambda m, d, g, a, l=self: l.gradient(m, d, g, a),
+            [x for x in op.inputs],
+            [tf.float32],
+            stateful=False)
+
+        return (None, g[0]*dloss, None, None)
 
 def ultrametric_loss_op(
         embedding,
@@ -154,7 +161,8 @@ def ultrametric_loss_op(
         lambda m, d, g, a, l=um_loss: l.loss(m, d, g, a),
         [emst, dist, gt_seg, alpha],
         [tf.float32, tf.int64, tf.int64],
-        gradient=lambda o, lo, p, n, l=um_loss: l.gradient(o, lo, p, n),
-        name=name)[0]
+        gradient_op=lambda o, lo, p, n, l=um_loss: l.gradient_op(o, lo, p, n),
+        name=name,
+        stateful=False)[0]
 
     return (loss, emst, edges_u, edges_v, dist)
