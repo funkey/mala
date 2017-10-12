@@ -98,6 +98,7 @@ def ultrametric_loss_op(
         gt_seg,
         alpha=0.1,
         add_coordinates=True,
+        pretrain=False,
         name=None):
     '''Returns a tensorflow op to compute the ultra-metric quadrupel loss::
 
@@ -122,7 +123,7 @@ def ultrametric_loss_op(
         name (string): An optional name for the operator.
     '''
 
-    alpha = tf.constant(alpha)
+    alpha = tf.constant(alpha, dtype=tf.float32)
 
     # We get the embedding as a tensor of shape (k, d, h, w).
     depth, height, width = embedding.shape.as_list()[-3:]
@@ -158,13 +159,37 @@ def ultrametric_loss_op(
 
     # 5. Compute the UM loss
 
-    um_loss = UmLoss()
-    loss = py_func_gradient(
-        lambda m, d, g, a, l=um_loss: l.loss(m, d, g, a),
-        [emst, dist, gt_seg, alpha],
-        [tf.float32, tf.float32, tf.float32],
-        gradient_op=lambda o, lo, p, n, l=um_loss: l.gradient_op(o, lo, p, n),
-        name=name,
-        stateful=False)[0]
+    if pretrain:
+
+        # we the um_loss just to get the num_pairs_pos and num_pairs_neg
+        _, _, num_pairs_pos, num_pairs_neg = tf.py_func(
+            get_um_loss,
+            [emst, gt_seg, alpha],
+            [tf.float64, tf.float64, tf.float64, tf.float64],
+            name=name,
+            stateful=False)
+
+        num_pairs_pos = tf.cast(num_pairs_pos, tf.float32)
+        num_pairs_neg = tf.cast(num_pairs_neg, tf.float32)
+
+        loss_pos = tf.multiply(
+            dist_squared,
+            num_pairs_pos)
+        loss_neg = tf.multiply(
+            tf.square(tf.maximum(0.0, alpha - dist)),
+            num_pairs_neg)
+
+        loss = tf.reduce_sum(loss_pos + loss_neg)
+
+    else:
+
+        um_loss = UmLoss()
+        loss = py_func_gradient(
+            lambda m, d, g, a, l=um_loss: l.loss(m, d, g, a),
+            [emst, dist, gt_seg, alpha],
+            [tf.float32, tf.float32, tf.float32],
+            gradient_op=lambda o, lo, p, n, l=um_loss: l.gradient_op(o, lo, p, n),
+            name=name,
+            stateful=False)[0]
 
     return (loss, emst, edges_u, edges_v, dist)
