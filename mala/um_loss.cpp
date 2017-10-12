@@ -84,8 +84,10 @@ double c_um_loss_gradient(
 	// normalize number of pairs, this normalizes the loss and gradient
 	for (int i = 0; i < numNodes - 1; i++) {
 
-		numPairsPos[i] /= totalNumPairsPos;
-		numPairsNeg[i] /= totalNumPairsNeg;
+		if (totalNumPairsPos > 0)
+			numPairsPos[i] /= totalNumPairsPos;
+		if (totalNumPairsNeg > 0)
+			numPairsNeg[i] /= totalNumPairsNeg;
 	}
 
 	// 2. Compute loss and first part of gradient
