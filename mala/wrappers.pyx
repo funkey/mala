@@ -11,7 +11,7 @@ cdef extern from "emst.h":
 
 cdef extern from "um_loss.h":
     double c_um_loss_gradient(
-        int numNodes,
+        size_t numNodes,
         const double* mst,
         const int64_t* gtSeg,
         double alpha,
@@ -45,8 +45,8 @@ def um_loss(
     np.ndarray[int64_t, ndim=1] gt_seg,
     double alpha):
 
-    cdef int num_points = gt_seg.shape[0]
-    cdef int num_edges = mst.shape[0]
+    cdef size_t num_points = gt_seg.shape[0]
+    cdef size_t num_edges = mst.shape[0]
 
     assert num_points == num_edges + 1, ("Number of edges in MST is unequal "
                                          "number of points in segmentation "

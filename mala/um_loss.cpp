@@ -4,7 +4,7 @@
 #include "um_loss.h"
 
 double c_um_loss_gradient(
-	int numNodes,
+	size_t numNodes,
 	const double* mst,
 	const int64_t* gtSeg,
 	double alpha,
@@ -13,14 +13,14 @@ double c_um_loss_gradient(
 	double* numPairsNeg) {
 
 	// labels and counts that each cluster overlaps with in gtSeg
-	std::vector<std::map<int64_t, int>> overlaps(numNodes);
+	std::vector<std::map<int64_t, size_t>> overlaps(numNodes);
 
 	// disjoint sets datastructure to keep track of cluster merging
-	std::vector<int> rank(numNodes);
+	std::vector<size_t> rank(numNodes);
 	std::vector<int64_t> parent(numNodes);
-	boost::disjoint_sets<int*, int64_t*> clusters(&rank[0], &parent[0]);
+	boost::disjoint_sets<size_t*, int64_t*> clusters(&rank[0], &parent[0]);
 
-	for (int i = 0; i < numNodes; i++) {
+	for (size_t i = 0; i < numNodes; i++) {
 
 		// initially, every node is in its own cluster...
 		clusters.make_set(i);
@@ -32,10 +32,10 @@ double c_um_loss_gradient(
 
 	// 1. Compute number of positive an negative pairs per edge.
 
-	double totalNumPairsPos = 0;
-	double totalNumPairsNeg = 0;
+	double totalNumPairsPos = 0.0;
+	double totalNumPairsNeg = 0.0;
 
-	for (int i = 0; i < numNodes - 1; i++) {
+	for (size_t i = 0; i < numNodes - 1; i++) {
 
 		int64_t u = mst[i*3];
 		int64_t v = mst[i*3 + 1];
@@ -57,8 +57,8 @@ double c_um_loss_gradient(
 
 				int64_t labelU = overlapsU.first;
 				int64_t labelV = overlapsV.first;
-				int countU = overlapsU.second;
-				int countV = overlapsV.second;
+				double countU = overlapsU.second;
+				double countV = overlapsV.second;
 
 				if (labelU == labelV)
 					numPairsPos[i] += countU*countV;
@@ -71,7 +71,7 @@ double c_um_loss_gradient(
 		for (const auto& overlapsV : overlaps[clusterV]) {
 
 			int64_t labelV = overlapsV.first;
-			int countV = overlapsV.second;
+			size_t countV = overlapsV.second;
 
 			overlaps[clusterU][labelV] += countV;
 		}
@@ -82,7 +82,7 @@ double c_um_loss_gradient(
 	}
 
 	// normalize number of pairs, this normalizes the loss and gradient
-	for (int i = 0; i < numNodes - 1; i++) {
+	for (size_t i = 0; i < numNodes - 1; i++) {
 
 		if (totalNumPairsPos > 0)
 			numPairsPos[i] /= totalNumPairsPos;
@@ -101,8 +101,8 @@ double c_um_loss_gradient(
 
 	// trailing edge index, follows i such that
 	// distance(j) < distance(i) - alpha
-	int j = 0;
-	for (int i = 0; i < numNodes - 1; i++) {
+	size_t j = 0;
+	for (size_t i = 0; i < numNodes - 1; i++) {
 
 		double distance = mst[i*3 + 2];
 
@@ -131,7 +131,7 @@ double c_um_loss_gradient(
 
 	// compute loss
 	double loss = 0;
-	for (int i = 0; i < numNodes - 1; i++) {
+	for (size_t i = 0; i < numNodes - 1; i++) {
 
 		double distance = mst[i*3 + 2];
 
@@ -152,7 +152,7 @@ double c_um_loss_gradient(
 	// trailing edge index, follows i such that
 	// distance(j) > distance(i) + alpha
 	j = numNodes - 2;
-	for (int i = numNodes - 2; i >= 0; i--) {
+	for (size_t i = numNodes - 2;; i--) {
 
 		double distance = mst[i*3 + 2];
 
@@ -167,17 +167,23 @@ double c_um_loss_gradient(
 		// update running scores
 		scoreD += numPairsPos[i];
 		scoreE += distance*numPairsPos[i];
+
+		if (i == 0)
+			break;
 	}
 
 	// finish pending trailing edges
-	for (; j >= 0; j--) {
+	for (;; j--) {
 
 		scoresD[j] = scoreD;
 		scoresE[j] = scoreE;
+
+		if (j == 0)
+			break;
 	}
 
 	// finally, compute the gradients
-	for (int i = 0; i < numNodes - 1; i++) {
+	for (size_t i = 0; i < numNodes - 1; i++) {
 
 		double distance = mst[i*3 + 2];
 

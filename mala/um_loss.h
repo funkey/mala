@@ -1,7 +1,7 @@
 #include <cstdint>
 
 double c_um_loss_gradient(
-	int numNodes,
+	size_t numNodes,
 	const double* mst,
 	const int64_t* gtSeg,
 	double alpha,
