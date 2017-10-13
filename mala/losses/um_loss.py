@@ -16,82 +16,93 @@ def get_emst_op(embedding, name=None):
         name=name,
         stateful=False)[0]
 
-def get_um_loss(mst, gt_seg, alpha):
-    '''Compute the ultra-metric loss and gradient given an MST and
-    segmentation.
+def get_um_loss(mst, dist, gt_seg, alpha):
+    '''Compute the ultra-metric loss given an MST and segmentation.
 
     Args:
 
         mst (Tensor, shape ``(3, n-1)``): u, v indices and distance of edges of
             the MST spanning n nodes.
 
+        dist (Tensor, shape ``(n-1)``): The distances of the edges. This
+            argument will be ignored, it is used only to communicate to
+            tensorflow that there is a dependency on distances. The distances
+            actually used are the ones in parameter ``mst``.
+
         gt_seg (Tensor, arbitrary shape): The label of each node. Will be
             flattened. The indices in mst should be valid indices into this
             array.
+
+        alpha (Tensor, single float): The margin value of the quadrupel loss.
 
     Returns:
 
         A tuple::
 
-            (loss, gradients, num_pairs_pos, num_pairs_neg)
+            (loss, num_pairs_pos, num_pairs_neg)
 
         Except for ``loss``, each entry is a tensor of shape ``(n-1,)``,
-        corresponding to the edges in the MST. ``gradients`` contains the
-        gradients on the edge distances. ``num_pairs_pos`` and
+        corresponding to the edges in the MST. ``num_pairs_pos`` and
         ``num_pairs_neg`` the number of positive and negative pairs that share
         an edge.
     '''
 
-    return mala.um_loss(
+    # We don't use 'dist' here, it is already contained in the mst. It is
+    # passed here just so that tensorflow knows there is dependecy to the
+    # ouput.
+    (loss, _, num_pairs_pos, num_pairs_neg) = mala.um_loss(
         mst,
         gt_seg.flatten(),
         alpha)
 
-class UmLoss:
-    '''Wrapper class to avoid re-computation of the UM loss between forward and
-    backward passes. This class will store the results of the forward pass, and
-    reuse it in the backward pass.
+    return (
+        np.float32(loss),
+        num_pairs_pos.astype(np.float32),
+        num_pairs_neg.astype(np.float32))
+
+def get_um_loss_gradient(mst, dist, gt_seg, alpha):
+    '''Compute the ultra-metric loss gradient given an MST and segmentation.
+
+    Args:
+
+        mst (Tensor, shape ``(3, n-1)``): u, v indices and distance of edges of
+            the MST spanning n nodes.
+
+        dist (Tensor, shape ``(n-1)``): The distances of the edges. This
+            argument will be ignored, it is used only to communicate to
+            tensorflow that there is a dependency on distances. The distances
+            actually used are the ones in parameter ``mst``.
+
+        gt_seg (Tensor, arbitrary shape): The label of each node. Will be
+            flattened. The indices in mst should be valid indices into this
+            array.
+
+        alpha (Tensor, single float): The margin value of the quadrupel loss.
+
+    Returns:
+
+        A Tensor containing the gradient on the distances.
     '''
 
-    def __init__(self):
-        self.__loss = None
-        self.__gradient = None
+    # We don't use 'dist' here, it is already contained in the mst. It is
+    # passed here just so that tensorflow knows there is dependecy to the
+    # ouput.
+    (_, gradient, _, _) = mala.um_loss(
+        mst,
+        gt_seg.flatten(),
+        alpha)
 
-    def loss(self, mst, dist, gt_seg, alpha):
+    return gradient.astype(np.float32)
 
-        # We don't use 'dist' here, it is already contained in the mst. It is
-        # passed here just so that tensorflow knows there is dependecy to the
-        # ouput.
-        (
-            self.__loss,
-            self.__gradient,
-            self.__num_pairs_pos,
-            self.__num_pairs_neg) = get_um_loss(mst, gt_seg, alpha)
+def get_um_loss_gradient_op(op, dloss, dpairs_pos, dpairs_neg):
 
-        # ensure that every float tf sees is float32
-        self.__loss = np.float32(self.__loss)
-        self.__num_pairs_pos = np.float32(self.__num_pairs_pos)
-        self.__num_pairs_neg = np.float32(self.__num_pairs_neg)
-        self.__gradient = self.__gradient.astype(np.float32)
+    gradient = tf.py_func(
+        get_um_loss_gradient,
+        [x for x in op.inputs],
+        [tf.float32],
+        stateful=False)[0]
 
-        return (
-            self.__loss,
-            self.__num_pairs_pos,
-            self.__num_pairs_neg)
-
-    def gradient(self, mst, dist, gt_seg, alpha):
-
-        return get_um_loss(mst, gt_seg, alpha)[1].astype(np.float32)
-
-    def gradient_op(self, op, dloss, dpairs_pos, dpairs_neg):
-
-        g = tf.py_func(
-            lambda m, d, g, a, l=self: l.gradient(m, d, g, a),
-            [x for x in op.inputs],
-            [tf.float32],
-            stateful=False)
-
-        return (None, g[0]*dloss, None, None)
+    return (None, gradient*dloss, None, None)
 
 def ultrametric_loss_op(
         embedding,
@@ -161,16 +172,13 @@ def ultrametric_loss_op(
 
     if pretrain:
 
-        # we the um_loss just to get the num_pairs_pos and num_pairs_neg
-        _, _, num_pairs_pos, num_pairs_neg = tf.py_func(
+        # we need the um_loss just to get the num_pairs_pos and num_pairs_neg
+        _, num_pairs_pos, num_pairs_neg = tf.py_func(
             get_um_loss,
             [emst, gt_seg, alpha],
-            [tf.float64, tf.float64, tf.float64, tf.float64],
+            [tf.float32, tf.float32, tf.float32],
             name=name,
             stateful=False)
-
-        num_pairs_pos = tf.cast(num_pairs_pos, tf.float32)
-        num_pairs_neg = tf.cast(num_pairs_neg, tf.float32)
 
         loss_pos = tf.multiply(
             dist_squared,
@@ -183,12 +191,11 @@ def ultrametric_loss_op(
 
     else:
 
-        um_loss = UmLoss()
         loss = py_func_gradient(
-            lambda m, d, g, a, l=um_loss: l.loss(m, d, g, a),
+            get_um_loss,
             [emst, dist, gt_seg, alpha],
             [tf.float32, tf.float32, tf.float32],
-            gradient_op=lambda o, lo, p, n, l=um_loss: l.gradient_op(o, lo, p, n),
+            gradient_op=get_um_loss_gradient_op,
             name=name,
             stateful=False)[0]
 
