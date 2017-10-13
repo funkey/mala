@@ -6,5 +6,7 @@ double c_um_loss_gradient(
 	const int64_t* gtSeg,
 	double alpha,
 	double* gradients,
-	double* numPairsPos,
-	double* numPairsNeg);
+	double* ratioPos,
+	double* ratioNeg,
+	double& totalNumPairsPos,
+	double& totalNumPairsNeg);

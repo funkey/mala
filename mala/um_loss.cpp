@@ -9,8 +9,10 @@ double c_um_loss_gradient(
 	const int64_t* gtSeg,
 	double alpha,
 	double* gradients,
-	double* numPairsPos,
-	double* numPairsNeg) {
+	double* ratioPos,
+	double* ratioNeg,
+	double& totalNumPairsPos,
+	double& totalNumPairsNeg) {
 
 	// labels and counts that each cluster overlaps with in gtSeg
 	std::vector<std::map<int64_t, size_t>> overlaps(numNodes);
@@ -32,8 +34,8 @@ double c_um_loss_gradient(
 
 	// 1. Compute number of positive an negative pairs per edge.
 
-	double totalNumPairsPos = 0.0;
-	double totalNumPairsNeg = 0.0;
+	totalNumPairsPos = 0.0;
+	totalNumPairsNeg = 0.0;
 
 	for (size_t i = 0; i < numNodes - 1; i++) {
 
@@ -50,8 +52,8 @@ double c_um_loss_gradient(
 			std::swap(clusterU, clusterV);
 
 		// find number of positive and negative pairs merged by (u, v)
-		numPairsPos[i] = 0;
-		numPairsNeg[i] = 0;
+		ratioPos[i] = 0;
+		ratioNeg[i] = 0;
 		for (const auto& overlapsU : overlaps[clusterU]) {
 			for (const auto& overlapsV : overlaps[clusterV]) {
 
@@ -61,9 +63,9 @@ double c_um_loss_gradient(
 				double countV = overlapsV.second;
 
 				if (labelU == labelV)
-					numPairsPos[i] += countU*countV;
+					ratioPos[i] += countU*countV;
 				else
-					numPairsNeg[i] += countU*countV;
+					ratioNeg[i] += countU*countV;
 			}
 		}
 
@@ -77,17 +79,18 @@ double c_um_loss_gradient(
 		}
 		overlaps[clusterV].clear();
 
-		totalNumPairsPos += numPairsPos[i];
-		totalNumPairsNeg += numPairsNeg[i];
+		// for now, 'ratio' is actually the sum
+		totalNumPairsPos += ratioPos[i];
+		totalNumPairsNeg += ratioNeg[i];
 	}
 
 	// normalize number of pairs, this normalizes the loss and gradient
 	for (size_t i = 0; i < numNodes - 1; i++) {
 
 		if (totalNumPairsPos > 0)
-			numPairsPos[i] /= totalNumPairsPos;
+			ratioPos[i] /= totalNumPairsPos;
 		if (totalNumPairsNeg > 0)
-			numPairsNeg[i] /= totalNumPairsNeg;
+			ratioNeg[i] /= totalNumPairsNeg;
 	}
 
 	// 2. Compute loss and first part of gradient
@@ -116,9 +119,9 @@ double c_um_loss_gradient(
 		}
 
 		// update running scores
-		scoreA += numPairsNeg[i];
-		scoreB += distance*numPairsNeg[i];
-		scoreC += distance*distance*numPairsNeg[i];
+		scoreA += ratioNeg[i];
+		scoreB += distance*ratioNeg[i];
+		scoreC += distance*distance*ratioNeg[i];
 	}
 
 	// finish pending trailing edges
@@ -136,7 +139,7 @@ double c_um_loss_gradient(
 		double distance = mst[i*3 + 2];
 
 		loss +=
-			numPairsPos[i]*(
+			ratioPos[i]*(
 				(distance*distance + 2*alpha*distance + alpha*alpha)*scoresA[i] +
 				(-2*distance - 2*alpha)*scoresB[i] +
 				scoresC[i]
@@ -165,8 +168,8 @@ double c_um_loss_gradient(
 		}
 
 		// update running scores
-		scoreD += numPairsPos[i];
-		scoreE += distance*numPairsPos[i];
+		scoreD += ratioPos[i];
+		scoreE += distance*ratioPos[i];
 
 		if (i == 0)
 			break;
@@ -188,13 +191,13 @@ double c_um_loss_gradient(
 		double distance = mst[i*3 + 2];
 
 		gradients[i] =
-			2*numPairsPos[i]*(
-				(alpha + distance)*(scoresA[i] - numPairsNeg[i]) -
-				(scoresB[i] - distance*numPairsNeg[i])
+			2*ratioPos[i]*(
+				(alpha + distance)*(scoresA[i] - ratioNeg[i]) -
+				(scoresB[i] - distance*ratioNeg[i])
 			) -
-			2*numPairsNeg[i]*(
-				(alpha - distance)*(scoresD[i] - numPairsPos[i]) +
-				(scoresE[i] - distance*numPairsPos[i])
+			2*ratioNeg[i]*(
+				(alpha - distance)*(scoresD[i] - ratioPos[i]) +
+				(scoresE[i] - distance*ratioPos[i])
 			);
 	}
 

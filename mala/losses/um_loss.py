@@ -39,26 +39,28 @@ def get_um_loss(mst, dist, gt_seg, alpha):
 
         A tuple::
 
-            (loss, num_pairs_pos, num_pairs_neg)
+            (loss, ratio_pos, ratio_neg)
 
         Except for ``loss``, each entry is a tensor of shape ``(n-1,)``,
-        corresponding to the edges in the MST. ``num_pairs_pos`` and
-        ``num_pairs_neg`` the number of positive and negative pairs that share
-        an edge.
+        corresponding to the edges in the MST. ``ratio_pos`` and ``ratio_neg``
+        are the ratio of positive and negative pairs that share an edge, of the
+        total number of positive and negative pairs.
     '''
 
     # We don't use 'dist' here, it is already contained in the mst. It is
     # passed here just so that tensorflow knows there is dependecy to the
     # ouput.
-    (loss, _, num_pairs_pos, num_pairs_neg) = mala.um_loss(
+    (loss, _, ratio_pos, ratio_neg, num_pairs_pos, num_pairs_neg) = mala.um_loss(
         mst,
         gt_seg.flatten(),
         alpha)
 
     return (
         np.float32(loss),
-        num_pairs_pos.astype(np.float32),
-        num_pairs_neg.astype(np.float32))
+        ratio_pos.astype(np.float32),
+        ratio_neg.astype(np.float32),
+        np.float32(num_pairs_pos),
+        np.float32(num_pairs_neg))
 
 def get_um_loss_gradient(mst, dist, gt_seg, alpha):
     '''Compute the ultra-metric loss gradient given an MST and segmentation.
@@ -87,14 +89,20 @@ def get_um_loss_gradient(mst, dist, gt_seg, alpha):
     # We don't use 'dist' here, it is already contained in the mst. It is
     # passed here just so that tensorflow knows there is dependecy to the
     # ouput.
-    (_, gradient, _, _) = mala.um_loss(
+    (_, gradient, _, _, _, _) = mala.um_loss(
         mst,
         gt_seg.flatten(),
         alpha)
 
     return gradient.astype(np.float32)
 
-def get_um_loss_gradient_op(op, dloss, dpairs_pos, dpairs_neg):
+def get_um_loss_gradient_op(
+        op,
+        dloss,
+        dratio_pos,
+        dratio_neg,
+        dnum_pairs_pos,
+        dnum_pairs_neg):
 
     gradient = tf.py_func(
         get_um_loss_gradient,
@@ -172,20 +180,21 @@ def ultrametric_loss_op(
 
     if pretrain:
 
-        # we need the um_loss just to get the num_pairs_pos and num_pairs_neg
-        _, num_pairs_pos, num_pairs_neg = tf.py_func(
+        # we need the um_loss just to get the ratio_pos, ratio_neg, and the
+        # total number of positive and negative pairs
+        _, ratio_pos, ratio_neg, num_pairs_pos, num_pairs_neg = tf.py_func(
             get_um_loss,
             [emst, gt_seg, alpha],
-            [tf.float32, tf.float32, tf.float32],
+            [tf.float32, tf.float32, tf.float32, tf.float32, tf.float32],
             name=name,
             stateful=False)
 
         loss_pos = tf.multiply(
             dist_squared,
-            num_pairs_pos)
+            ratio_pos)
         loss_neg = tf.multiply(
             tf.square(tf.maximum(0.0, alpha - dist)),
-            num_pairs_neg)
+            ratio_neg)
 
         loss = tf.reduce_sum(loss_pos + loss_neg)
 
@@ -194,7 +203,7 @@ def ultrametric_loss_op(
         loss = py_func_gradient(
             get_um_loss,
             [emst, dist, gt_seg, alpha],
-            [tf.float32, tf.float32, tf.float32],
+            [tf.float32, tf.float32, tf.float32, tf.float32, tf.float32],
             gradient_op=get_um_loss_gradient_op,
             name=name,
             stateful=False)[0]
