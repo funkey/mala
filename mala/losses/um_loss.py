@@ -184,7 +184,7 @@ def ultrametric_loss_op(
         # total number of positive and negative pairs
         _, ratio_pos, ratio_neg, num_pairs_pos, num_pairs_neg = tf.py_func(
             get_um_loss,
-            [emst, gt_seg, alpha],
+            [emst, dist, gt_seg, alpha],
             [tf.float32, tf.float32, tf.float32, tf.float32, tf.float32],
             name=name,
             stateful=False)
@@ -196,7 +196,11 @@ def ultrametric_loss_op(
             tf.square(tf.maximum(0.0, alpha - dist)),
             ratio_neg)
 
-        loss = tf.reduce_sum(loss_pos + loss_neg)
+        sum_pos = tf.reduce_sum(loss_pos)*num_pairs_pos
+        sum_neg = tf.reduce_sum(loss_neg)*num_pairs_neg
+        num_pairs = num_pairs_pos + num_pairs_neg
+
+        loss = (sum_pos + sum_neg)/num_pairs
 
     else:
 
