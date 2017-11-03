@@ -20,20 +20,25 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         sigma (float or tuple of float): The context to consider to compute
             the shape descriptor in world units. This will be the standard
-            deviation of a Gaussian kernel used to accumulate the shape
-            descriptor.
+            deviation of a Gaussian kernel or the radius of the sphere.
+
+        mode (string): Either ``gaussian`` or ``sphere``. Specifies how to
+            accumulate local statistics: ``gaussian`` uses Gaussian convolution
+            to compute a weighed average of statistics inside an object.
+            ``sphere`` accumulates values in a sphere.
     '''
 
-    def __init__(self, segmentation, descriptor, sigma):
+    def __init__(self, segmentation, descriptor, sigma, mode='gaussian'):
 
-        # TODO: support disk mode
         self.segmentation = segmentation
         self.descriptor = descriptor
         try:
             self.sigma = tuple(sigma)
         except:
             self.sigma = (sigma,)*3
-        self.context = tuple(s*3.0 for s in self.sigma)
+        self.mode = mode
+        self.voxel_size = None
+        self.context = None
         self.skip = False
 
     def setup(self):
@@ -41,7 +46,15 @@ class AddLocalShapeDescriptor(BatchFilter):
         spec = self.spec[self.segmentation].copy()
         spec.dtype = np.float32
 
+        self.voxel_size = spec.voxel_size
         self.provides(self.descriptor, spec)
+
+        if self.mode == 'gaussian':
+            self.context = tuple(s*3.0 for s in self.sigma)
+        elif self.mode == 'sphere':
+            self.context = tuple(self.sigma)
+        else:
+            raise RuntimeError("Unkown mode %s"%mode)
 
     def prepare(self, request):
 
@@ -62,8 +75,7 @@ class AddLocalShapeDescriptor(BatchFilter):
         if self.skip:
             return
 
-        voxel_size = self.spec[self.segmentation].voxel_size
-        dims = len(voxel_size)
+        dims = len(self.voxel_size)
 
         assert dims == 3, "AddLocalShapeDescriptor only works on 3D volumes."
 
@@ -86,9 +98,7 @@ class AddLocalShapeDescriptor(BatchFilter):
 
     def __get_descriptor(self, segmentation):
 
-        voxel_size = self.spec[self.segmentation].voxel_size
-
-        sigma_voxel = tuple(s/v for s, v in zip(self.sigma, voxel_size))
+        sigma_voxel = tuple(s/v for s, v in zip(self.sigma, self.voxel_size))
         logger.debug("Sigma in voxels: %s", sigma_voxel)
 
         depth, height, width = segmentation.shape
@@ -109,12 +119,12 @@ class AddLocalShapeDescriptor(BatchFilter):
 
             # voxel coordinates in world units
             # TODO: don't recreate
-            print("Create meshgrid...")
+            logger.debug("Create meshgrid...")
             coords = np.array(
                 np.meshgrid(
-                    np.arange(0, depth*voxel_size[0], voxel_size[0]),
-                    np.arange(0, height*voxel_size[1], voxel_size[1]),
-                    np.arange(0, width*voxel_size[2], voxel_size[2]),
+                    np.arange(0, depth*self.voxel_size[0], self.voxel_size[0]),
+                    np.arange(0, height*self.voxel_size[1], self.voxel_size[1]),
+                    np.arange(0, width*self.voxel_size[2], self.voxel_size[2]),
                     indexing='ij'),
                 dtype=np.float32)
 
@@ -124,7 +134,7 @@ class AddLocalShapeDescriptor(BatchFilter):
             # number of inside voxels
             logger.debug("Counting inside voxels...")
             start = time.time()
-            count = self.__aggregate(mask, sigma_voxel)
+            count = self.__aggregate(mask, sigma_voxel, self.mode)
             count[mask==0] = 0
             counts += count
             # avoid division by zero
@@ -134,7 +144,7 @@ class AddLocalShapeDescriptor(BatchFilter):
             # mean
             logger.debug("Computing mean position of inside voxels...")
             start = time.time()
-            mean = np.array([self.__aggregate(coords[d], sigma_voxel) for d in range(3)])
+            mean = np.array([self.__aggregate(coords[d], sigma_voxel, self.mode) for d in range(3)])
             mean /= count
             logger.debug("%f seconds", time.time() - start)
 
@@ -148,8 +158,12 @@ class AddLocalShapeDescriptor(BatchFilter):
             # covariance
             logger.debug("Computing covariance...")
             coords_outer = self.__outer_product(coords)
-            covariance = np.array([self.__aggregate(coords_outer[d],
-                sigma_voxel) for d in range(9)])
+            covariance = np.array([
+                self.__aggregate(
+                    coords_outer[d],
+                    sigma_voxel,
+                    self.mode)
+                for d in range(9)])
             covariance /= count
             covariance -= self.__outer_product(mean)
             logger.debug("%f seconds", time.time() - start)
@@ -181,29 +195,34 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         return np.concatenate([mean_offsets, variances, pearsons, counts[None,:]])
 
-    def __make_disk(self, radius):
+    def __make_sphere(self, radius):
 
-        print("Creating disk with radius %d..."%radius)
+        logger.debug("Creating sphere with radius %d...", radius)
 
         r2 = np.arange(-radius, radius)**2
         dist2 = r2[:, None, None] + r2[:, None] + r2
         return (dist2 <= radius**2).astype(np.float32)
 
-    def __aggregate(self, array, radius, mode='gaussian'):
+    def __aggregate(self, array, sigma, mode='gaussian'):
 
         if mode == 'gaussian':
 
             return gaussian_filter(
                 array,
-                sigma=radius,
+                sigma=sigma,
                 mode='constant',
                 cval=0.0,
                 truncate=3.0)
 
-        elif mode == 'disk':
+        elif mode == 'sphere':
 
-            disk = self.__make_disk(radius)
-            return convolve(array, disk, mode='constant', cval=0.0)
+            radius = sigma[0]
+            for d in range(len(sigma)):
+                assert radius == sigma[d], (
+                    "For mode 'sphere', only isotropic sigma is allowed.")
+
+            sphere = self.__make_sphere(radius)
+            return convolve(array, sphere, mode='constant', cval=0.0)
 
         else:
             raise RuntimeError("Unknown mode %s"%mode)
