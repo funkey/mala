@@ -39,6 +39,7 @@ setup(
             'mala',
             'mala.losses',
             'mala.networks',
+            'mala.gunpowder',
         ],
         ext_modules = [
             Extension(
