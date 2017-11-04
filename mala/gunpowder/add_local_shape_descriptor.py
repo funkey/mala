@@ -184,6 +184,32 @@ class AddLocalShapeDescriptor(BatchFilter):
             descriptors += descriptor*mask[roi_slices]
             logger.debug("%f seconds", time.time() - start)
 
+        # normalize stats
+
+        # get max possible mean offset for normalization
+        if self.mode == 'gaussian':
+            # farthes voxel in context is 3*sigma away, but due to Gaussian
+            # weighting, sigma itself is probably a better upper bound
+            max_distance = np.array(
+                [s for s in self.sigma],
+                dtype=np.float32)
+        elif self.mode == 'sphere':
+            # farthes voxel in context is sigma away, but this is almost
+            # impossible to reach as offset -- let's take half sigma
+            max_distance = np.array(
+                [0.5*s for s in self.sigma],
+                dtype=np.float32)
+
+        # mean offsets in [0, 1]
+        descriptors[[0, 1, 2]] = descriptors[[0, 1, 2]]/max_distance[:, None, None, None]*0.5 + 0.5
+        # pearsons in [0, 1]
+        descriptors[[6, 7, 8]] = descriptors[[6, 7, 8]]*0.5 + 0.5
+        # reset background to 0
+        descriptors[[0, 1, 2, 6, 7, 8]] *= (segmentation[roi_slices] != 0)
+
+        # clip outliers
+        np.clip(descriptors, 0.0, 1.0, out=descriptors)
+
         return descriptors
 
     def __get_stats(self, coords, mask, sigma_voxel, roi):
