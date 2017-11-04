@@ -2,6 +2,7 @@ import logging
 from gunpowder import BatchFilter, Volume
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage.filters import convolve
+from numpy.lib.stride_tricks import as_strided
 import numpy as np
 import time
 
@@ -26,17 +27,29 @@ class AddLocalShapeDescriptor(BatchFilter):
             accumulate local statistics: ``gaussian`` uses Gaussian convolution
             to compute a weighed average of statistics inside an object.
             ``sphere`` accumulates values in a sphere.
+
+        downsample (int, optional): Downsample the segmentation mask to extract
+            the statistics with the given factore. Default is 1 (no
+            downsampling).
     '''
 
-    def __init__(self, segmentation, descriptor, sigma, mode='gaussian'):
+    def __init__(
+            self,
+            segmentation,
+            descriptor,
+            sigma,
+            mode='gaussian',
+            downsample=1):
 
         self.segmentation = segmentation
+        self.coords = {}
         self.descriptor = descriptor
         try:
             self.sigma = tuple(sigma)
         except:
             self.sigma = (sigma,)*3
         self.mode = mode
+        self.downsample = downsample
         self.voxel_size = None
         self.context = None
         self.skip = False
@@ -81,7 +94,7 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         segmentation_volume = batch.volumes[self.segmentation]
 
-        descriptor = self.__get_descriptor(segmentation_volume.data)
+        descriptor = self.__get_descriptors(segmentation_volume.data)
 
         descriptor_spec = self.spec[self.descriptor].copy()
         descriptor_spec.roi = segmentation_volume.spec.roi.copy()
@@ -96,17 +109,35 @@ class AddLocalShapeDescriptor(BatchFilter):
         batch.volumes[self.segmentation] = segmentation_volume
         batch.volumes[self.descriptor] = descriptor_volume
 
-    def __get_descriptor(self, segmentation):
+    def __get_descriptors(self, segmentation):
 
-        sigma_voxel = tuple(s/v for s, v in zip(self.sigma, self.voxel_size))
-        logger.debug("Sigma in voxels: %s", sigma_voxel)
+        # prepare full-res descriptor volumes
+        descriptors = np.zeros((10,) + segmentation.shape, dtype=np.float32)
 
-        depth, height, width = segmentation.shape
+        # get sub-sampled voxel size and sigma
+        df = self.downsample
+        logger.debug("Downsampling segmentation with factor %f", df)
+        sub_voxel_size = tuple(v*df for v in self.voxel_size)
+        sub_sigma_voxel = tuple(s/v for s, v in zip(self.sigma, sub_voxel_size))
+        sub_shape = tuple(s/df for s in segmentation.shape)
+        logger.debug("Downsampled voxel size: %s", sub_voxel_size)
+        logger.debug("Sigma in voxels: %s", sub_sigma_voxel)
+        logger.debug("Downsampled shape: %s", sub_shape)
 
-        counts = np.zeros((depth, height, width), dtype=np.float32)
-        mean_offsets = np.zeros((3, depth, height, width), dtype=np.float32)
-        variances = np.zeros((3, depth, height, width), dtype=np.float32)
-        pearsons = np.zeros((3, depth, height, width), dtype=np.float32)
+        # prepare coords volume (reuse if we already have one)
+        if (sub_shape, sub_voxel_size) not in self.coords:
+
+            logger.debug("Create meshgrid...")
+
+            self.coords[(sub_shape, sub_voxel_size)] = np.array(
+                np.meshgrid(
+                    np.arange(0, sub_shape[0]*sub_voxel_size[0], sub_voxel_size[0]),
+                    np.arange(0, sub_shape[1]*sub_voxel_size[1], sub_voxel_size[1]),
+                    np.arange(0, sub_shape[2]*sub_voxel_size[2], sub_voxel_size[2]),
+                    indexing='ij'),
+                dtype=np.float32)
+
+        coords = self.coords[(sub_shape, sub_voxel_size)]
 
         for label in np.unique(segmentation):
 
@@ -116,84 +147,89 @@ class AddLocalShapeDescriptor(BatchFilter):
             logger.debug("Creating shape descriptors for label %d", label)
 
             mask = (segmentation==label).astype(np.float32)
+            sub_mask = mask[::df, ::df, ::df]
 
-            # voxel coordinates in world units
-            # TODO: don't recreate
-            logger.debug("Create meshgrid...")
-            coords = np.array(
-                np.meshgrid(
-                    np.arange(0, depth*self.voxel_size[0], self.voxel_size[0]),
-                    np.arange(0, height*self.voxel_size[1], self.voxel_size[1]),
-                    np.arange(0, width*self.voxel_size[2], self.voxel_size[2]),
-                    indexing='ij'),
-                dtype=np.float32)
+            sub_count, sub_mean_offset, sub_variance, sub_pearson = self.__get_stats(
+                coords,
+                sub_mask,
+                sub_sigma_voxel)
 
-            # mask for object
-            coords[:, mask==0] = 0
+            sub_descriptor = np.concatenate([
+                sub_mean_offset,
+                sub_variance,
+                sub_pearson,
+                sub_count[None,:]])
 
-            # number of inside voxels
-            logger.debug("Counting inside voxels...")
+            logger.debug("Upscaling descriptors...")
             start = time.time()
-            count = self.__aggregate(mask, sigma_voxel, self.mode)
-            count[mask==0] = 0
-            counts += count
-            # avoid division by zero
-            count[count==0] = 1
+            descriptor = self.__upsample(sub_descriptor, df)
             logger.debug("%f seconds", time.time() - start)
 
-            # mean
-            logger.debug("Computing mean position of inside voxels...")
+            logger.debug("Accumulating descriptors...")
             start = time.time()
-            mean = np.array([self.__aggregate(coords[d], sigma_voxel, self.mode) for d in range(3)])
-            mean /= count
+            descriptors += descriptor*mask
             logger.debug("%f seconds", time.time() - start)
 
-            logger.debug("Computing offset of mean position...")
-            start = time.time()
-            mean_offset = mean - coords
+        return descriptors
 
-            mean_offset[:, mask==0] = 0
-            mean_offsets += mean_offset
+    def __get_stats(self, coords, mask, sigma_voxel):
 
-            # covariance
-            logger.debug("Computing covariance...")
-            coords_outer = self.__outer_product(coords)
-            covariance = np.array([
-                self.__aggregate(
-                    coords_outer[d],
-                    sigma_voxel,
-                    self.mode)
-                for d in range(9)])
-            covariance /= count
-            covariance -= self.__outer_product(mean)
-            logger.debug("%f seconds", time.time() - start)
+        # mask for object
+        coords = coords*mask
 
+        # number of inside voxels
+        logger.debug("Counting inside voxels...")
+        start = time.time()
+        count = self.__aggregate(mask, sigma_voxel, self.mode)
+        # avoid division by zero
+        count[count==0] = 1
+        logger.debug("%f seconds", time.time() - start)
+
+        # mean
+        logger.debug("Computing mean position of inside voxels...")
+        start = time.time()
+        mean = np.array([self.__aggregate(coords[d], sigma_voxel, self.mode) for d in range(3)])
+        mean /= count
+        logger.debug("%f seconds", time.time() - start)
+
+        logger.debug("Computing offset of mean position...")
+        start = time.time()
+        mean_offset = mean - coords
+
+        # covariance
+        logger.debug("Computing covariance...")
+        coords_outer = self.__outer_product(coords)
+        covariance = np.array([
+            self.__aggregate(
+                coords_outer[d],
+                sigma_voxel,
+                self.mode)
             # remove duplicate entries in covariance
             # 0 1 2
             # 3 4 5
             # 6 7 8
-            # variances of z, y, x coordinates
-            variance = covariance[[0, 4, 8]]
-            # Pearson coefficients of zy, zx, yx
-            pearson = covariance[[1, 2, 5]]
+            for d in [0, 4, 8, 1, 2, 5]])
+        covariance /= count
+        covariance -= self.__outer_product(mean)[[0, 4, 8, 1, 2, 5]]
+        logger.debug("%f seconds", time.time() - start)
 
-            # normalize Pearson correlation coefficient
-            variance[variance<1e-3] = 1e-3 # numerical stability
-            pearson[0] /= np.sqrt(variance[0])*np.sqrt(variance[1])
-            pearson[1] /= np.sqrt(variance[0])*np.sqrt(variance[2])
-            pearson[2] /= np.sqrt(variance[1])*np.sqrt(variance[2])
+        # variances of z, y, x coordinates
+        variance = covariance[[0, 1, 2]]
+        # Pearson coefficients of zy, zx, yx
+        pearson = covariance[[3, 4, 5]]
 
-            # normalize variances to interval [0, 1]
-            variance[0] /= self.sigma[0]**2
-            variance[1] /= self.sigma[1]**2
-            variance[2] /= self.sigma[2]**2
+        # normalize Pearson correlation coefficient
+        variance[variance<1e-3] = 1e-3 # numerical stability
+        pearson[0] /= np.sqrt(variance[0])*np.sqrt(variance[1])
+        pearson[1] /= np.sqrt(variance[0])*np.sqrt(variance[2])
+        pearson[2] /= np.sqrt(variance[1])*np.sqrt(variance[2])
 
-            variance[:, mask==0] = 0
-            pearson[:, mask==0] = 0
-            variances += variance
-            pearsons += pearson
+        # normalize variances to interval [0, 1]
+        variance[0] /= self.sigma[0]**2
+        variance[1] /= self.sigma[1]**2
+        variance[2] /= self.sigma[2]**2
 
-        return np.concatenate([mean_offsets, variances, pearsons, counts[None,:]])
+        return count, mean_offset, variance, pearson
 
     def __make_sphere(self, radius):
 
@@ -235,3 +271,15 @@ class AddLocalShapeDescriptor(BatchFilter):
         k = array.shape[0]
         outer = np.einsum('i...,j...->ij...', array, array)
         return outer.reshape((k**2,)+array.shape[1:])
+
+    def __upsample(self, array, f):
+
+        shape = array.shape
+        stride = array.strides
+
+        view = as_strided(
+            array,
+            (shape[0], shape[1], f, shape[2], f, shape[3], f),
+            (stride[0], stride[1], 0, stride[2], 0, stride[3], 0))
+
+        return view.reshape(shape[0], shape[1]*f, shape[2]*f, shape[3]*f)
