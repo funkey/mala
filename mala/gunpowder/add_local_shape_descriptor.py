@@ -94,35 +94,47 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         segmentation_volume = batch.volumes[self.segmentation]
 
-        descriptor = self.__get_descriptors(segmentation_volume.data)
+        # NOTE: The following assumes that the ROIs of segmentation and
+        # descriptors are the same. This might in general not be the case.
+
+        # crop segmentation to requested segmentation ROI
+        request_roi = request[self.segmentation].roi
+        cropped_segmentation_volume = segmentation_volume.crop(request_roi)
+
+        # get voxel roi of cropped segmentation in segmentation -- this is the
+        # only region in which we have to compute the descriptors
+        seg_roi = segmentation_volume.spec.roi
+        cropped_seg_roi = cropped_segmentation_volume.spec.roi
+        roi = (
+            seg_roi.intersect(cropped_seg_roi) -
+            seg_roi.get_offset())/self.voxel_size
+
+        descriptor = self.__get_descriptors(segmentation_volume.data, roi)
 
         descriptor_spec = self.spec[self.descriptor].copy()
-        descriptor_spec.roi = segmentation_volume.spec.roi.copy()
+        descriptor_spec.roi = cropped_segmentation_volume.spec.roi.copy()
         descriptor_volume = Volume(descriptor, descriptor_spec)
 
-        # crop segmentation and descriptor to original segmentation ROI
-        request_roi = request[self.segmentation].roi
-
-        descriptor_volume = descriptor_volume.crop(request_roi)
-        segmentation_volume = segmentation_volume.crop(request_roi)
-
-        batch.volumes[self.segmentation] = segmentation_volume
+        batch.volumes[self.segmentation] = cropped_segmentation_volume
         batch.volumes[self.descriptor] = descriptor_volume
 
-    def __get_descriptors(self, segmentation):
+    def __get_descriptors(self, segmentation, roi):
 
-        # prepare full-res descriptor volumes
-        descriptors = np.zeros((10,) + segmentation.shape, dtype=np.float32)
+        roi_slices = roi.get_bounding_box()
 
-        # get sub-sampled voxel size and sigma
+        # prepare full-res descriptor volumes for roi
+        descriptors = np.zeros((10,) + roi.get_shape(), dtype=np.float32)
+
+        # get sub-sampled shape, roi, voxel size and sigma
         df = self.downsample
         logger.debug("Downsampling segmentation with factor %f", df)
+        sub_shape = tuple(s/df for s in segmentation.shape)
+        sub_roi = roi/df
         sub_voxel_size = tuple(v*df for v in self.voxel_size)
         sub_sigma_voxel = tuple(s/v for s, v in zip(self.sigma, sub_voxel_size))
-        sub_shape = tuple(s/df for s in segmentation.shape)
+        logger.debug("Downsampled shape: %s", sub_shape)
         logger.debug("Downsampled voxel size: %s", sub_voxel_size)
         logger.debug("Sigma in voxels: %s", sub_sigma_voxel)
-        logger.debug("Downsampled shape: %s", sub_shape)
 
         # prepare coords volume (reuse if we already have one)
         if (sub_shape, sub_voxel_size) not in self.coords:
@@ -139,7 +151,8 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         coords = self.coords[(sub_shape, sub_voxel_size)]
 
-        for label in np.unique(segmentation):
+        # for all labels inside ROI
+        for label in np.unique(segmentation[roi_slices]):
 
             if label == 0:
                 continue
@@ -152,7 +165,8 @@ class AddLocalShapeDescriptor(BatchFilter):
             sub_count, sub_mean_offset, sub_variance, sub_pearson = self.__get_stats(
                 coords,
                 sub_mask,
-                sub_sigma_voxel)
+                sub_sigma_voxel,
+                sub_roi)
 
             sub_descriptor = np.concatenate([
                 sub_mean_offset,
@@ -167,12 +181,12 @@ class AddLocalShapeDescriptor(BatchFilter):
 
             logger.debug("Accumulating descriptors...")
             start = time.time()
-            descriptors += descriptor*mask
+            descriptors += descriptor*mask[roi_slices]
             logger.debug("%f seconds", time.time() - start)
 
         return descriptors
 
-    def __get_stats(self, coords, mask, sigma_voxel):
+    def __get_stats(self, coords, mask, sigma_voxel, roi):
 
         # mask for object
         coords = coords*mask
@@ -180,7 +194,7 @@ class AddLocalShapeDescriptor(BatchFilter):
         # number of inside voxels
         logger.debug("Counting inside voxels...")
         start = time.time()
-        count = self.__aggregate(mask, sigma_voxel, self.mode)
+        count = self.__aggregate(mask, sigma_voxel, self.mode, roi)
         # avoid division by zero
         count[count==0] = 1
         logger.debug("%f seconds", time.time() - start)
@@ -188,22 +202,21 @@ class AddLocalShapeDescriptor(BatchFilter):
         # mean
         logger.debug("Computing mean position of inside voxels...")
         start = time.time()
-        mean = np.array([self.__aggregate(coords[d], sigma_voxel, self.mode) for d in range(3)])
+        mean = np.array([
+            self.__aggregate(coords[d], sigma_voxel, self.mode, roi)
+            for d in range(3)])
         mean /= count
         logger.debug("%f seconds", time.time() - start)
 
         logger.debug("Computing offset of mean position...")
         start = time.time()
-        mean_offset = mean - coords
+        mean_offset = mean - coords[(slice(None),) + roi.get_bounding_box()]
 
         # covariance
         logger.debug("Computing covariance...")
         coords_outer = self.__outer_product(coords)
         covariance = np.array([
-            self.__aggregate(
-                coords_outer[d],
-                sigma_voxel,
-                self.mode)
+            self.__aggregate(coords_outer[d], sigma_voxel, self.mode, roi)
             # remove duplicate entries in covariance
             # 0 1 2
             # 3 4 5
@@ -239,7 +252,12 @@ class AddLocalShapeDescriptor(BatchFilter):
         dist2 = r2[:, None, None] + r2[:, None] + r2
         return (dist2 <= radius**2).astype(np.float32)
 
-    def __aggregate(self, array, sigma, mode='gaussian'):
+    def __aggregate(self, array, sigma, mode='gaussian', roi=None):
+
+        if roi is None:
+            roi_slices = (slice(None),)
+        else:
+            roi_slices = roi.get_bounding_box()
 
         if mode == 'gaussian':
 
@@ -248,7 +266,7 @@ class AddLocalShapeDescriptor(BatchFilter):
                 sigma=sigma,
                 mode='constant',
                 cval=0.0,
-                truncate=3.0)
+                truncate=3.0)[roi_slices]
 
         elif mode == 'sphere':
 
@@ -258,7 +276,11 @@ class AddLocalShapeDescriptor(BatchFilter):
                     "For mode 'sphere', only isotropic sigma is allowed.")
 
             sphere = self.__make_sphere(radius)
-            return convolve(array, sphere, mode='constant', cval=0.0)
+            return convolve(
+                array,
+                sphere,
+                mode='constant',
+                cval=0.0)[roi_slices]
 
         else:
             raise RuntimeError("Unknown mode %s"%mode)
