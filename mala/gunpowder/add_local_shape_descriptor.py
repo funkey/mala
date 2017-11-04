@@ -233,9 +233,9 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         # normalize Pearson correlation coefficient
         variance[variance<1e-3] = 1e-3 # numerical stability
-        pearson[0] /= np.sqrt(variance[0])*np.sqrt(variance[1])
-        pearson[1] /= np.sqrt(variance[0])*np.sqrt(variance[2])
-        pearson[2] /= np.sqrt(variance[1])*np.sqrt(variance[2])
+        pearson[0] /= np.sqrt(variance[0]*variance[1])
+        pearson[1] /= np.sqrt(variance[0]*variance[2])
+        pearson[2] /= np.sqrt(variance[1]*variance[2])
 
         # normalize variances to interval [0, 1]
         variance[0] /= self.sigma[0]**2
