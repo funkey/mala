@@ -189,7 +189,7 @@ class AddLocalShapeDescriptor(BatchFilter):
     def __get_stats(self, coords, mask, sigma_voxel, roi):
 
         # mask for object
-        coords = coords*mask
+        masked_coords = coords*mask
 
         # number of inside voxels
         logger.debug("Counting inside voxels...")
@@ -203,7 +203,7 @@ class AddLocalShapeDescriptor(BatchFilter):
         logger.debug("Computing mean position of inside voxels...")
         start = time.time()
         mean = np.array([
-            self.__aggregate(coords[d], sigma_voxel, self.mode, roi)
+            self.__aggregate(masked_coords[d], sigma_voxel, self.mode, roi)
             for d in range(3)])
         mean /= count
         logger.debug("%f seconds", time.time() - start)
@@ -214,7 +214,7 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         # covariance
         logger.debug("Computing covariance...")
-        coords_outer = self.__outer_product(coords)
+        coords_outer = self.__outer_product(masked_coords)
         covariance = np.array([
             self.__aggregate(coords_outer[d], sigma_voxel, self.mode, roi)
             # remove duplicate entries in covariance
