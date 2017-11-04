@@ -19,6 +19,11 @@ class AddLocalShapeDescriptor(BatchFilter):
         descriptor (:class:`VolumeType`): The volume of the shape descriptor to
             generate.
 
+        mask (:class:`VolumeType`, optional): The volume to store a binary mask
+            the size of the descriptors. Background voxels, which do not have a
+            descriptor, will be set to 0. This can be used as a loss scale
+            during training, such that background is ignored.
+
         sigma (float or tuple of float): The context to consider to compute
             the shape descriptor in world units. This will be the standard
             deviation of a Gaussian kernel or the radius of the sphere.
@@ -37,13 +42,15 @@ class AddLocalShapeDescriptor(BatchFilter):
             self,
             segmentation,
             descriptor,
-            sigma,
+            mask=None,
+            sigma=5.0,
             mode='gaussian',
             downsample=1):
 
         self.segmentation = segmentation
         self.coords = {}
         self.descriptor = descriptor
+        self.mask = mask
         try:
             self.sigma = tuple(sigma)
         except:
@@ -62,6 +69,9 @@ class AddLocalShapeDescriptor(BatchFilter):
         self.voxel_size = spec.voxel_size
         self.provides(self.descriptor, spec)
 
+        if self.mask:
+            self.provides(self.mask, spec.copy())
+
         if self.mode == 'gaussian':
             self.context = tuple(s*3.0 for s in self.sigma)
         elif self.mode == 'sphere':
@@ -76,6 +86,9 @@ class AddLocalShapeDescriptor(BatchFilter):
             self.skip = False
         else:
             self.skip = True
+
+        if self.mask and self.mask in request:
+            del request[self.mask]
 
         # increase segmentation ROI to fit Gaussian
         grown_roi = request[self.segmentation].roi.grow(
@@ -117,6 +130,11 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         batch.volumes[self.segmentation] = cropped_segmentation_volume
         batch.volumes[self.descriptor] = descriptor_volume
+
+        if self.mask and self.mask in request:
+            channel_mask = (cropped_segmentation_volume.data!=0).astype(np.float32)
+            mask = np.array([channel_mask]*descriptor.shape[0])
+            batch.volumes[self.mask] = Volume(mask, descriptor_spec.copy())
 
     def __get_descriptors(self, segmentation, roi):
 
