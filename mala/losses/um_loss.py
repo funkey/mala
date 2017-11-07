@@ -117,6 +117,7 @@ def ultrametric_loss_op(
         gt_seg,
         alpha=0.1,
         add_coordinates=True,
+        coordinate_scale=1.0,
         pretrain=False,
         name=None):
     '''Returns a tensorflow op to compute the ultra-metric quadrupel loss::
@@ -139,6 +140,9 @@ def ultrametric_loss_op(
         add_coordinates(bool): If ``True``, add the ``(z, y, x)`` coordinates
             of the points to the embedding.
 
+        coordinate_scale(float or tuple of float): How to scale the
+            coordinates, if used to augment the embedding.
+
         name (string): An optional name for the operator.
     '''
 
@@ -150,10 +154,16 @@ def ultrametric_loss_op(
     # 1. Augmented by spatial coordinates, if requested.
 
     if add_coordinates:
+
+        try:
+            scale = tuple(coordinate_scale)
+        except:
+            scale = (coordinate_scale,)*3
+
         coordinates = tf.meshgrid(
-            range(depth),
-            range(height),
-            range(width),
+            np.arange(0, depth*scale[0], scale[0]),
+            np.arange(0, height*scale[1], scale[1]),
+            np.arange(0, width*scale[2], scale[2]),
             indexing='ij')
         for i in range(len(coordinates)):
             coordinates[i] = tf.cast(coordinates[i], tf.float32)
