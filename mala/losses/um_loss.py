@@ -137,11 +137,16 @@ def ultrametric_loss_op(
 
         alpha (float): The margin term of the quadrupel loss.
 
-        add_coordinates(bool): If ``True``, add the ``(z, y, x)`` coordinates
+        add_coordinates (bool): If ``True``, add the ``(z, y, x)`` coordinates
             of the points to the embedding.
 
         coordinate_scale(float or tuple of float): How to scale the
             coordinates, if used to augment the embedding.
+
+        pretrain (bool): Instead of computing the loss on all quadrupels,
+            compute it on pairs only. The loss of positive pairs is the
+            Euclidean distance of their maximin edge squared, of negative pairs
+            ``max(0, alpha - distance)`` squared.
 
         name (string): An optional name for the operator.
     '''
