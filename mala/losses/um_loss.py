@@ -1,11 +1,20 @@
 import tensorflow as tf
 import numpy as np
 import mala
+import logging
 from .py_func_gradient import py_func_gradient
+
+logger = logging.getLogger(__name__)
 
 def get_emst(embedding):
 
-    return mala.emst(embedding.astype(np.float64))
+    emst = mala.emst(embedding.astype(np.float64))
+
+    d_min = np.min(emst[:,2])
+    d_max = np.max(emst[:,2])
+    logger.info("min/max ultrametric: %f/%f", d_min, d_max)
+
+    return emst
 
 def get_emst_op(embedding, name=None):
 
