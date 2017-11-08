@@ -160,10 +160,8 @@ def ultrametric_loss_op(
         name (string): An optional name for the operator.
     '''
 
-    alpha = tf.constant(alpha, dtype=tf.float32)
-
     # We get the embedding as a tensor of shape (k, d, h, w).
-    depth, height, width = embedding.shape.as_list()[-3:]
+    k, depth, height, width = embedding.shape.as_list()
 
     # 1. Augmented by spatial coordinates, if requested.
 
@@ -183,6 +181,18 @@ def ultrametric_loss_op(
             coordinates[i] = tf.cast(coordinates[i], tf.float32)
         embedding = tf.concat([embedding, coordinates], 0)
 
+        max_scale = max(scale)
+        min_scale = max(scale)
+        min_d = min_scale
+        max_d = np.sqrt(max_scale**2 + k)
+
+        if (max_d - min_d) < alpha:
+            logger.warn(
+                "Your alpha is too big: min and max ultrametric between any "
+                "pair of points is %f and %f (this assumes your embedding is "
+                "in [0, 1], if it is not, you might ignore this warning)",
+                min_d, max_d)
+
     # 2. Transpose into tensor (d*h*w, k+3), i.e., one embedding vector per
     #    node, augmented by spatial coordinates if requested.
 
@@ -201,6 +211,8 @@ def ultrametric_loss_op(
     dist = tf.sqrt(dist_squared)
 
     # 5. Compute the UM loss
+
+    alpha = tf.constant(alpha, dtype=tf.float32)
 
     if pretrain:
 
