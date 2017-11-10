@@ -82,19 +82,23 @@ class AddLocalShapeDescriptor(BatchFilter):
     def prepare(self, request):
 
         if self.descriptor in request:
+
+            # increase segmentation ROI to fit Gaussian
+            context_roi = request[self.descriptor].roi.grow(
+                self.context,
+                self.context)
+            grown_roi = request[self.segmentation].roi.union(context_roi)
+            request[self.segmentation].roi = grown_roi
+
             del request[self.descriptor]
             self.skip = False
+
         else:
+
             self.skip = True
 
         if self.mask and self.mask in request:
             del request[self.mask]
-
-        # increase segmentation ROI to fit Gaussian
-        grown_roi = request[self.segmentation].roi.grow(
-            self.context,
-            self.context)
-        request[self.segmentation].roi = grown_roi
 
     def process(self, batch, request):
 
@@ -110,23 +114,26 @@ class AddLocalShapeDescriptor(BatchFilter):
         # NOTE: The following assumes that the ROIs of segmentation and
         # descriptors are the same. This might in general not be the case.
 
-        # crop segmentation to requested segmentation ROI
-        request_roi = request[self.segmentation].roi
-        cropped_segmentation_volume = segmentation_volume.crop(request_roi)
-
-        # get voxel roi of cropped segmentation in segmentation -- this is the
-        # only region in which we have to compute the descriptors
+        # get voxel roi of requested descriptors -- this is the only region in
+        # which we have to compute the descriptors
         seg_roi = segmentation_volume.spec.roi
-        cropped_seg_roi = cropped_segmentation_volume.spec.roi
-        roi = (
-            seg_roi.intersect(cropped_seg_roi) -
+        descriptor_roi = request[self.descriptor].roi
+        voxel_roi_in_seg = (
+            seg_roi.intersect(descriptor_roi) -
             seg_roi.get_offset())/self.voxel_size
 
-        descriptor = self.__get_descriptors(segmentation_volume.data, roi)
+        descriptor = self.__get_descriptors(
+            segmentation_volume.data,
+            voxel_roi_in_seg)
 
+        # create descriptor volume
         descriptor_spec = self.spec[self.descriptor].copy()
-        descriptor_spec.roi = cropped_segmentation_volume.spec.roi.copy()
+        descriptor_spec.roi = request[self.descriptor].roi.copy()
         descriptor_volume = Volume(descriptor, descriptor_spec)
+
+        # crop segmentation back to original request
+        seg_request_roi = request[self.segmentation].roi
+        cropped_segmentation_volume = segmentation_volume.crop(seg_request_roi)
 
         batch.volumes[self.segmentation] = cropped_segmentation_volume
         batch.volumes[self.descriptor] = descriptor_volume
