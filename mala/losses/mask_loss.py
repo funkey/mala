@@ -32,9 +32,6 @@ def aggregate(stats, neighborhood, separable=False):
     #
     # Instead, let's use the batch dimension for "channel" wise convolution.
 
-    b, k, d, h, w = stats.get_shape().as_list()
-    stats = tf.reshape(stats, [k, 1, d, h, w])
-
     if not separable:
 
         agg = tf.nn.convolution(
@@ -60,7 +57,7 @@ def aggregate(stats, neighborhood, separable=False):
             padding='SAME',
             data_format='NCDHW')
 
-    return tf.reshape(agg, [1, k, d, h, w])
+    return agg
 
 def label_loss(
     label,
@@ -85,18 +82,21 @@ def label_loss(
     # get distance of each voxel to this label embedding
     distances = (
         embedding_sum_squares*s_0 -
-        2.0*tf.reduce_sum(embedding*s_1, axis=1, keep_dims=True) +
+        2.0*tf.reduce_sum(embedding*s_1, axis=0, keep_dims=True) +
         s_2)
 
     # combine to total loss (positive distance within object, negative outside)
-    return distances*(2.0*mask - 1.0)
+    label_loss = distances*(2.0*mask - 1.0)
+
+    # strip batch and channel dimensions
+    return label_loss[0, 0]
 
 def mask_loss_op(
         embedding,
         gt_seg,
         neighborhood,
-        separable=False):
-    # TODO: check comments on dimensions
+        separable=False,
+        swap_memory=False):
     '''Returns a tensorflow op to compute the mask loss.
 
     The mask loss measures the weighted embedding distance of every voxel to
@@ -113,9 +113,26 @@ def mask_loss_op(
         gt_seg (Tensor, shape ``(d, h, w)``): The ground-truth labels of the
             points.
 
-        sigma (float): The standard deviation of a Gaussian used to weigh the
-            embedding distances as a function of spatial distance.
+        neighborhood (Tensor, shape ``(d, h, w)`` or ``(w,)``): The neighborhood
+            to consider to minimize/maximize distance to feature vectors of
+            same/other objects. Should be 1D if ``separable`` is ``True``.
+
+        separable (bool, optional): Indicate that the neighborhood is 1D and a
+            separable convolution can be used.
+
+        swap_memory (bool, optional): Since convolutions are performed for ever
+            object in ``gt_seg``, this operator can exceed the memory available.
+            This option will swap memory between the CPU and GPU for each label
+            to avoid running out of memory.
     '''
+
+    loss = tf.to_float(tf.zeros_like(gt_seg))
+
+    # reshape embedding into (k, 1, d, h, w)
+    embedding = embedding[:, None, :, :, :]
+
+    # reshape gt_seg into (1, 1, d, h, w)
+    gt_seg = gt_seg[None, None, :, :, :]
 
     # reshape neighborhood into (d, h, w, 1, 1)
     if separable:
@@ -126,7 +143,7 @@ def mask_loss_op(
     # element-wise squares of the embedding
     embedding_sum_squares = tf.reduce_sum(
         tf.square(embedding),
-        axis=1,
+        axis=0,
         keep_dims=True)
 
     # list of all labels
@@ -135,8 +152,6 @@ def mask_loss_op(
 
     # iterate over all labels
     i = tf.constant(0)
-
-    loss = tf.to_float(tf.zeros_like(gt_seg))
 
     # just a strange way to write a for loop: loop over all labels in gt_seg,
     # compute the 'label_loss' and add it to 'loss'
@@ -150,6 +165,10 @@ def mask_loss_op(
             gt_seg,
             neighborhood,
             separable)]
-    _, loss = tf.while_loop(iterate, add_loss, [i, loss])
+    _, loss = tf.while_loop(
+        iterate,
+        add_loss,
+        [i, loss],
+        swap_memory=swap_memory)
 
     return tf.reduce_sum(loss), loss
