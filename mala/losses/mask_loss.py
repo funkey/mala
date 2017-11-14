@@ -117,9 +117,11 @@ def mask_loss_op(
             embedding distances as a function of spatial distance.
     '''
 
-    # create a neighborhood kernel
-    # TODO: create Gaussian
-    neighborhood = neighborhood[:,:,:,None,None]
+    # reshape neighborhood into (d, h, w, 1, 1)
+    if separable:
+        neighborhood = neighborhood[None,None,:,None,None]
+    else:
+        neighborhood = neighborhood[:,:,:,None,None]
 
     # element-wise squares of the embedding
     embedding_sum_squares = tf.reduce_sum(
