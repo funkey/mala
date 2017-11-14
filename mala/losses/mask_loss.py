@@ -67,17 +67,20 @@ def label_loss(
     neighborhood,
     separable):
     '''
-    Compute the mask loss for the given label only.
+    Compute the mask loss for the given label only. Returns postive and negative
+    contributions and the count of positive and negative pairrs (weighted by
+    ``neighborhood``).
     '''
 
     # create the label mask
-    mask = tf.to_float(tf.equal(gt_seg, label))
+    mask_pos = tf.to_float(tf.equal(gt_seg, label))
+    mask_neg = 1.0 - mask_pos
 
-    # aggregate s_0, s_1, and s_2 scores from mask, embedding, and
+    # aggregate s_0, s_1, and s_2 scores from mask_pos, embedding, and
     # embedding_sum_squares
-    s_0 = aggregate(mask, neighborhood, separable)
-    s_1 = aggregate(embedding*mask, neighborhood, separable)
-    s_2 = aggregate(embedding_sum_squares*mask, neighborhood, separable)
+    s_0 = aggregate(mask_pos, neighborhood, separable)
+    s_1 = aggregate(embedding*mask_pos, neighborhood, separable)
+    s_2 = aggregate(embedding_sum_squares*mask_pos, neighborhood, separable)
 
     # get distance of each voxel to this label embedding
     distances = (
@@ -85,11 +88,37 @@ def label_loss(
         2.0*tf.reduce_sum(embedding*s_1, axis=0, keep_dims=True) +
         s_2)
 
-    # combine to total loss (positive distance within object, negative outside)
-    label_loss = distances*(2.0*mask - 1.0)
+    # count pairs
+    count_pos = tf.reduce_sum(s_0*mask_pos)
+    count_neg = tf.reduce_sum(s_0*mask_neg)
 
-    # strip batch and channel dimensions
-    return label_loss[0, 0]
+    # compute loss
+    loss_pos = tf.reduce_sum(distances*mask_pos)
+    loss_neg = tf.reduce_sum(distances*mask_neg)
+
+    return (loss_pos, loss_neg, count_pos, count_neg)
+
+def add_label_loss(
+    i,
+    loss_pos, loss_neg,
+    count_pos, count_neg,
+    label,
+    embedding,
+    embedding_sum_squares,
+    gt_seg,
+    neighborhood,
+    separable):
+    '''Helper for tf.while_loop.'''
+
+    lp, ln, cp, cn = label_loss(
+        label,
+        embedding,
+        embedding_sum_squares,
+        gt_seg,
+        neighborhood,
+        separable)
+
+    return (i + 1, loss_pos + lp, loss_neg + ln, count_pos + cp, count_neg + cn)
 
 def mask_loss_op(
         embedding,
@@ -126,8 +155,6 @@ def mask_loss_op(
             to avoid running out of memory.
     '''
 
-    loss = tf.to_float(tf.zeros_like(gt_seg))
-
     # reshape embedding into (k, 1, d, h, w)
     embedding = embedding[:, None, :, :, :]
 
@@ -153,22 +180,32 @@ def mask_loss_op(
     # iterate over all labels
     i = tf.constant(0)
 
+    loss_pos = tf.constant(0, dtype=tf.float32)
+    loss_neg = tf.constant(0, dtype=tf.float32)
+    count_pos = tf.constant(0, dtype=tf.float32)
+    count_neg= tf.constant(0, dtype=tf.float32)
+
     # just a strange way to write a for loop: loop over all labels in gt_seg,
-    # compute the 'label_loss' and add it to 'loss'
-    iterate = lambda i, loss : tf.less(i, num_labels)
-    add_loss = lambda i, loss : [
-        i + 1,
-        loss + label_loss(
-            labels[i],
-            embedding,
-            embedding_sum_squares,
-            gt_seg,
-            neighborhood,
-            separable)]
-    _, loss = tf.while_loop(
-        iterate,
-        add_loss,
-        [i, loss],
+    # compute the 'label_loss' and add it to 'loss_pos' and 'loss_neg'
+    test = lambda i, lp, ln, cp, cn: tf.less(i, num_labels)
+    body = lambda i, lp, ln, cp, cn: add_label_loss(
+        i,
+        lp, ln,
+        cp, cn,
+        labels[i],
+        embedding,
+        embedding_sum_squares,
+        gt_seg,
+        neighborhood,
+        separable)
+    _, loss_pos, loss_neg, count_pos, count_neg = tf.while_loop(
+        test,
+        body,
+        [i, loss_pos, loss_neg, count_pos, count_neg],
         swap_memory=swap_memory)
 
-    return tf.reduce_sum(loss), loss
+    # normalize the loss
+    loss_pos /= count_pos
+    loss_neg /= count_neg
+
+    return loss_pos - loss_neg, loss_pos, loss_neg, count_pos, count_neg
