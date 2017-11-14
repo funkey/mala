@@ -3,22 +3,43 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def aggregate(stats, neighborhood):
+def aggregate(stats, neighborhood, separable=False):
     '''Convolve stats, such that each point contains a weighted sum of the
     stats around it.'''
 
-    return tf.nn.convolution(
+    if not separable:
+
+        return tf.nn.convolution(
+            stats,
+            neighborhood,
+            padding='SAME',
+            data_format='NCDHW')
+
+    x = tf.nn.convolution(
         stats,
         neighborhood,
         padding='SAME',
         data_format='NCDHW')
+    xy = tf.nn.convolution(
+        x,
+        tf.transpose(neighborhood, perm=[0, 2, 1, 3, 4]),
+        padding='SAME',
+        data_format='NCDHW')
+    xyz = tf.nn.convolution(
+        xy,
+        tf.transpose(neighborhood, perm=[2, 0, 1, 3, 4]),
+        padding='SAME',
+        data_format='NCDHW')
+
+    return xyz
 
 def label_loss(
     label,
     embedding,
     embedding_sum_squares,
     gt_seg,
-    neighborhood):
+    neighborhood,
+    separable):
     '''
     Compute the mask loss for the given label only.
     '''
@@ -28,9 +49,9 @@ def label_loss(
 
     # aggregate s_0, s_1, and s_2 scores from mask, embedding, and
     # embedding_sum_squares
-    s_0 = aggregate(mask, neighborhood)
-    s_1 = aggregate(embedding*mask, neighborhood)
-    s_2 = aggregate(embedding_sum_squares*mask, neighborhood)
+    s_0 = aggregate(mask, neighborhood, separable)
+    s_1 = aggregate(embedding*mask, neighborhood, separable)
+    s_2 = aggregate(embedding_sum_squares*mask, neighborhood, separable)
 
     # get distance of each voxel to this label embedding
     distances = (
@@ -44,7 +65,8 @@ def label_loss(
 def mask_loss_op(
         embedding,
         gt_seg,
-        neighborhood):
+        neighborhood,
+        separable=False):
     # TODO: check comments on dimensions
     '''Returns a tensorflow op to compute the mask loss.
 
@@ -95,7 +117,8 @@ def mask_loss_op(
             embedding,
             embedding_sum_squares,
             gt_seg,
-            neighborhood)]
+            neighborhood,
+            separable)]
     _, loss = tf.while_loop(iterate, add_loss, [i, loss])
 
     return tf.reduce_sum(loss), loss
