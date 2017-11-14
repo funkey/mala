@@ -7,31 +7,60 @@ def aggregate(stats, neighborhood, separable=False):
     '''Convolve stats, such that each point contains a weighted sum of the
     stats around it.'''
 
+    # What exactly does tf.nn.convolution do?
+    #
+    # inputs are:
+    #   input  (1, q, d, h, w)
+    #   filter (d, h, w, q, k)
+    #
+    # output is:
+    #   output (1, k, d, h, w)
+    #
+    # Things are pretty clear except for the channel part. Why does the filter
+    # need to have extra q and k dimensions?
+    #
+    #   output[1, k, z, y, x] = sum_q filter[:, :, :, q, k]*input[1, q, :, :, :]
+    #
+    #   For every output channel there is a set of 3D filters, one for each
+    #   input channel. The output channel is the sum of the convolutions of this
+    #   set.
+    #   If you just wanted to apply channel-wise same convolution, you'd have to
+    #   create a filter of size (d, h, w, q, q), and each filter[:, :, :, q, k]
+    #   with q!=k would be zero, with q==k would be the actual filter.
+    #
+    #   This seems very wateful.
+    #
+    # Instead, let's use the batch dimension for "channel" wise convolution.
+
+    b, k, d, h, w = stats.get_shape().as_list()
+    stats = tf.reshape(stats, [k, 1, d, h, w])
+
     if not separable:
 
-        return tf.nn.convolution(
+        agg = tf.nn.convolution(
             stats,
             neighborhood,
             padding='SAME',
             data_format='NCDHW')
+    else:
 
-    x = tf.nn.convolution(
-        stats,
-        neighborhood,
-        padding='SAME',
-        data_format='NCDHW')
-    xy = tf.nn.convolution(
-        x,
-        tf.transpose(neighborhood, perm=[0, 2, 1, 3, 4]),
-        padding='SAME',
-        data_format='NCDHW')
-    xyz = tf.nn.convolution(
-        xy,
-        tf.transpose(neighborhood, perm=[2, 0, 1, 3, 4]),
-        padding='SAME',
-        data_format='NCDHW')
+        x = tf.nn.convolution(
+            stats,
+            neighborhood,
+            padding='SAME',
+            data_format='NCDHW')
+        xy = tf.nn.convolution(
+            x,
+            tf.transpose(neighborhood, perm=[0, 2, 1, 3, 4]),
+            padding='SAME',
+            data_format='NCDHW')
+        agg = tf.nn.convolution(
+            xy,
+            tf.transpose(neighborhood, perm=[2, 0, 1, 3, 4]),
+            padding='SAME',
+            data_format='NCDHW')
 
-    return xyz
+    return tf.reshape(agg, [1, k, d, h, w])
 
 def label_loss(
     label,
