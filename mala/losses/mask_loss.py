@@ -28,7 +28,7 @@ def aggregate(stats, neighborhood, separable=False):
     #   create a filter of size (d, h, w, q, q), and each filter[:, :, :, q, k]
     #   with q!=k would be zero, with q==k would be the actual filter.
     #
-    #   This seems very wateful.
+    #   This seems very wasteful.
     #
     # Instead, let's use the batch dimension for "channel" wise convolution.
 
@@ -63,6 +63,7 @@ def label_loss(
     label,
     embedding,
     embedding_sum_squares,
+    mask_fg,
     gt_seg,
     neighborhood,
     separable):
@@ -74,7 +75,7 @@ def label_loss(
 
     # create the label mask
     mask_pos = tf.to_float(tf.equal(gt_seg, label))
-    mask_neg = 1.0 - mask_pos
+    mask_neg = (1.0 - mask_pos)*mask_fg
 
     # aggregate s_0, s_1, and s_2 scores from mask_pos, embedding, and
     # embedding_sum_squares
@@ -105,20 +106,34 @@ def add_label_loss(
     label,
     embedding,
     embedding_sum_squares,
+    mask_fg,
     gt_seg,
     neighborhood,
     separable):
     '''Helper for tf.while_loop.'''
 
-    lp, ln, cp, cn = label_loss(
-        label,
-        embedding,
-        embedding_sum_squares,
-        gt_seg,
-        neighborhood,
-        separable)
+    # ignore background label
+    lp, ln, cp, cn = tf.cond(
+        tf.equal(label, 0),
+        lambda: (0.0, 0.0, 0.0, 0.0),
+        lambda: label_loss(
+            label,
+            embedding,
+            embedding_sum_squares,
+            mask_fg,
+            gt_seg,
+            neighborhood,
+            separable))
 
     return (i + 1, loss_pos + lp, loss_neg + ln, count_pos + cp, count_neg + cn)
+
+def save_div(a, b, eps=1e-6):
+    '''Divide a by b, if b is larger than eps. Otherwise, return a.'''
+
+    return tf.cond(
+        tf.greater_equal(b, 1e-6),
+        lambda: a/b,
+        lambda: a)
 
 def mask_loss_op(
         embedding,
@@ -167,6 +182,9 @@ def mask_loss_op(
     else:
         neighborhood = neighborhood[:,:,:,None,None]
 
+    # create a foreground mask
+    mask_fg = tf.to_float(tf.not_equal(gt_seg, 0))
+
     # element-wise squares of the embedding
     embedding_sum_squares = tf.reduce_sum(
         tf.square(embedding),
@@ -195,6 +213,7 @@ def mask_loss_op(
         labels[i],
         embedding,
         embedding_sum_squares,
+        mask_fg,
         gt_seg,
         neighborhood,
         separable)
@@ -205,7 +224,7 @@ def mask_loss_op(
         swap_memory=swap_memory)
 
     # normalize the loss
-    loss_pos /= count_pos
-    loss_neg /= count_neg
+    loss_pos = save_div(loss_pos, count_pos)
+    loss_neg = save_div(loss_neg, count_neg)
 
     return loss_pos - loss_neg, loss_pos, loss_neg, count_pos, count_neg
