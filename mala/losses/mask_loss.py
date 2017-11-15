@@ -59,22 +59,21 @@ def aggregate(stats, neighborhood, separable=False):
 
     return agg
 
-def label_loss(
-    label,
+def mask_loss(
     embedding,
     embedding_sum_squares,
+    mask_pos,
     mask_fg,
-    gt_seg,
     neighborhood,
     separable):
     '''
-    Compute the mask loss for the given label only. Returns postive and negative
-    contributions and the count of positive and negative pairrs (weighted by
+    Compute the mask loss for the given object only. Returns postive and negative
+    contributions and the count of positive and negative pairs (weighted by
     ``neighborhood``).
     '''
 
-    # create the label mask
-    mask_pos = tf.to_float(tf.equal(gt_seg, label))
+    # create the negative label mask (voxels that are not in mask_pos and not
+    # background)
     mask_neg = (1.0 - mask_pos)*mask_fg
 
     # aggregate s_0, s_1, and s_2 scores from mask_pos, embedding, and
@@ -99,58 +98,6 @@ def label_loss(
 
     return (loss_pos, loss_neg, count_pos, count_neg)
 
-def add_label_loss(
-    loss_pos, loss_neg,
-    count_pos, count_neg,
-    label,
-    embedding,
-    embedding_sum_squares,
-    mask_fg,
-    gt_seg,
-    neighborhood,
-    separable):
-
-    lp, ln, cp, cn = label_loss(
-        label,
-        embedding,
-        embedding_sum_squares,
-        mask_fg,
-        gt_seg,
-        neighborhood,
-        separable)
-
-    return (loss_pos + lp, loss_neg + ln, count_pos + cp, count_neg + cn)
-
-def add_fg_label_loss(
-    i,
-    loss_pos, loss_neg,
-    count_pos, count_neg,
-    label,
-    embedding,
-    embedding_sum_squares,
-    mask_fg,
-    gt_seg,
-    neighborhood,
-    separable):
-    '''Helper for tf.while_loop.'''
-
-    # ignore background label
-    lp, ln, cp, cn = tf.cond(
-        tf.equal(label, 0),
-        lambda: (loss_pos, loss_neg, count_pos, count_neg),
-        lambda: add_label_loss(
-            loss_pos, loss_neg,
-            count_pos, count_neg,
-            label,
-            embedding,
-            embedding_sum_squares,
-            mask_fg,
-            gt_seg,
-            neighborhood,
-            separable))
-
-    return (i + 1, lp, ln, cp, cn)
-
 def save_div(a, b, eps=1e-6):
     '''Divide a by b, if b is larger than eps. Otherwise, return a.'''
 
@@ -161,10 +108,10 @@ def save_div(a, b, eps=1e-6):
 
 def mask_loss_op(
         embedding,
-        gt_seg,
+        object_masks,
+        background_mask,
         neighborhood,
-        separable=False,
-        swap_memory=False):
+        separable=False):
     '''Returns a tensorflow op to compute the mask loss.
 
     The mask loss measures the weighted embedding distance of every voxel to
@@ -178,8 +125,11 @@ def mask_loss_op(
         embedding (Tensor, shape ``(k, d, h, w)``): A k-dimensional feature
             embedding of points in 3D.
 
-        gt_seg (Tensor, shape ``(d, h, w)``): The ground-truth labels of the
-            points.
+        object_masks (Tensor, shape ``(n, d, h, w)``): Binary masks of the
+            ground-truth objects.
+
+        background_mask (Tensor, shape ``(d, h, w)``): Voxels to ignore (e.g.,
+            boundary voxels between objects.
 
         neighborhood (Tensor, shape ``(d, h, w)`` or ``(w,)``): The neighborhood
             to consider to minimize/maximize distance to feature vectors of
@@ -187,18 +137,15 @@ def mask_loss_op(
 
         separable (bool, optional): Indicate that the neighborhood is 1D and a
             separable convolution can be used.
-
-        swap_memory (bool, optional): Since convolutions are performed for ever
-            object in ``gt_seg``, this operator can exceed the memory available.
-            This option will swap memory between the CPU and GPU for each label
-            to avoid running out of memory.
     '''
+
+    n, depth, height, width = object_masks.get_shape().as_list()
 
     # reshape embedding into (k, 1, d, h, w)
     embedding = embedding[:, None, :, :, :]
 
-    # reshape gt_seg into (1, 1, d, h, w)
-    gt_seg = gt_seg[None, None, :, :, :]
+    # reshape object_masks into (n, 1, d, h, w)
+    object_masks = tf.reshape(object_masks, (n, 1, depth, height, width))
 
     # reshape neighborhood into (d, h, w, 1, 1)
     if separable:
@@ -207,7 +154,7 @@ def mask_loss_op(
         neighborhood = neighborhood[:,:,:,None,None]
 
     # create a foreground mask
-    mask_fg = tf.to_float(tf.not_equal(gt_seg, 0))
+    mask_fg = 1.0 - background_mask
 
     # element-wise squares of the embedding
     embedding_sum_squares = tf.reduce_sum(
@@ -215,37 +162,25 @@ def mask_loss_op(
         axis=0,
         keep_dims=True)
 
-    # list of all labels
-    labels = tf.unique(tf.reshape(gt_seg, [-1]))[0]
-    num_labels = tf.size(labels)
-
-    # iterate over all labels
-    i = tf.constant(0)
-
     loss_pos = tf.constant(0, dtype=tf.float32)
     loss_neg = tf.constant(0, dtype=tf.float32)
     count_pos = tf.constant(0, dtype=tf.float32)
     count_neg= tf.constant(0, dtype=tf.float32)
 
-    # just a strange way to write a for loop: loop over all labels in gt_seg,
-    # compute the 'label_loss' and add it to 'loss_pos' and 'loss_neg'
-    test = lambda i, lp, ln, cp, cn: tf.less(i, num_labels)
-    body = lambda i, lp, ln, cp, cn: add_fg_label_loss(
-        i,
-        lp, ln,
-        cp, cn,
-        labels[i],
-        embedding,
-        embedding_sum_squares,
-        mask_fg,
-        gt_seg,
-        neighborhood,
-        separable)
-    _, loss_pos, loss_neg, count_pos, count_neg = tf.while_loop(
-        test,
-        body,
-        [i, loss_pos, loss_neg, count_pos, count_neg],
-        swap_memory=swap_memory)
+    for i in range(n):
+
+        lp, ln, cp, cn = mask_loss(
+            embedding,
+            embedding_sum_squares,
+            object_masks[i][None,:],
+            mask_fg,
+            neighborhood,
+            separable)
+
+        loss_pos += lp
+        loss_neg += ln
+        count_pos += cp
+        count_neg += cn
 
     # normalize the loss
     loss_pos = save_div(loss_pos, count_pos)
