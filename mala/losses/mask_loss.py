@@ -100,6 +100,28 @@ def label_loss(
     return (loss_pos, loss_neg, count_pos, count_neg)
 
 def add_label_loss(
+    loss_pos, loss_neg,
+    count_pos, count_neg,
+    label,
+    embedding,
+    embedding_sum_squares,
+    mask_fg,
+    gt_seg,
+    neighborhood,
+    separable):
+
+    lp, ln, cp, cn = label_loss(
+        label,
+        embedding,
+        embedding_sum_squares,
+        mask_fg,
+        gt_seg,
+        neighborhood,
+        separable)
+
+    return (loss_pos + lp, loss_neg + ln, count_pos + cp, count_neg + cn)
+
+def add_fg_label_loss(
     i,
     loss_pos, loss_neg,
     count_pos, count_neg,
@@ -115,8 +137,10 @@ def add_label_loss(
     # ignore background label
     lp, ln, cp, cn = tf.cond(
         tf.equal(label, 0),
-        lambda: (0.0, 0.0, 0.0, 0.0),
-        lambda: label_loss(
+        lambda: (loss_pos, loss_neg, count_pos, count_neg),
+        lambda: add_label_loss(
+            loss_pos, loss_neg,
+            count_pos, count_neg,
             label,
             embedding,
             embedding_sum_squares,
@@ -125,7 +149,7 @@ def add_label_loss(
             neighborhood,
             separable))
 
-    return (i + 1, loss_pos + lp, loss_neg + ln, count_pos + cp, count_neg + cn)
+    return (i + 1, lp, ln, cp, cn)
 
 def save_div(a, b, eps=1e-6):
     '''Divide a by b, if b is larger than eps. Otherwise, return a.'''
@@ -206,7 +230,7 @@ def mask_loss_op(
     # just a strange way to write a for loop: loop over all labels in gt_seg,
     # compute the 'label_loss' and add it to 'loss_pos' and 'loss_neg'
     test = lambda i, lp, ln, cp, cn: tf.less(i, num_labels)
-    body = lambda i, lp, ln, cp, cn: add_label_loss(
+    body = lambda i, lp, ln, cp, cn: add_fg_label_loss(
         i,
         lp, ln,
         cp, cn,
