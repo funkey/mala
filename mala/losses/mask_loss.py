@@ -102,7 +102,7 @@ def save_div(a, b, eps=1e-6):
     '''Divide a by b, if b is larger than eps. Otherwise, return a.'''
 
     return tf.cond(
-        tf.greater_equal(b, 1e-6),
+        tf.greater_equal(b, eps),
         lambda: a/b,
         lambda: a)
 
