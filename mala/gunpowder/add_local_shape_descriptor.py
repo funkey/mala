@@ -111,9 +111,6 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         segmentation_volume = batch.volumes[self.segmentation]
 
-        # NOTE: The following assumes that the ROIs of segmentation and
-        # descriptors are the same. This might in general not be the case.
-
         # get voxel roi of requested descriptors -- this is the only region in
         # which we have to compute the descriptors
         seg_roi = segmentation_volume.spec.roi
@@ -131,17 +128,19 @@ class AddLocalShapeDescriptor(BatchFilter):
         descriptor_spec.roi = request[self.descriptor].roi.copy()
         descriptor_volume = Volume(descriptor, descriptor_spec)
 
+        # create mask volume
+        if self.mask and self.mask in request:
+            channel_mask = (segmentation_volume.crop(descriptor_roi).data!=0).astype(np.float32)
+            assert channel_mask.shape[-3:] == descriptor.shape[-3:]
+            mask = np.array([channel_mask]*descriptor.shape[0])
+            batch.volumes[self.mask] = Volume(mask, descriptor_spec.copy())
+
         # crop segmentation back to original request
         seg_request_roi = request[self.segmentation].roi
         cropped_segmentation_volume = segmentation_volume.crop(seg_request_roi)
 
         batch.volumes[self.segmentation] = cropped_segmentation_volume
         batch.volumes[self.descriptor] = descriptor_volume
-
-        if self.mask and self.mask in request:
-            channel_mask = (cropped_segmentation_volume.data!=0).astype(np.float32)
-            mask = np.array([channel_mask]*descriptor.shape[0])
-            batch.volumes[self.mask] = Volume(mask, descriptor_spec.copy())
 
     def __get_descriptors(self, segmentation, roi):
 
