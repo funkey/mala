@@ -1,4 +1,4 @@
-FROM funkey/gunpowder:v0.3-pre5
+FROM funkey/gunpowder:v0.3
 LABEL maintainer jfunke@iri.upc.edu
 
 # install dependencies

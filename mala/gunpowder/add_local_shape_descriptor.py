@@ -1,5 +1,5 @@
 import logging
-from gunpowder import BatchFilter, Volume
+from gunpowder import BatchFilter, Array
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage.filters import convolve
 from numpy.lib.stride_tricks import as_strided
@@ -13,13 +13,13 @@ class AddLocalShapeDescriptor(BatchFilter):
 
     Args:
 
-        segmentation (:class:`VolumeType`): The volume storing the segmentation
+        segmentation (:class:`ArrayKey`): The array storing the segmentation
             to use.
 
-        descriptor (:class:`VolumeType`): The volume of the shape descriptor to
+        descriptor (:class:`ArrayKey`): The array of the shape descriptor to
             generate.
 
-        mask (:class:`VolumeType`, optional): The volume to store a binary mask
+        mask (:class:`ArrayKey`, optional): The array to store a binary mask
             the size of the descriptors. Background voxels, which do not have a
             descriptor, will be set to 0. This can be used as a loss scale
             during training, such that background is ignored.
@@ -107,46 +107,46 @@ class AddLocalShapeDescriptor(BatchFilter):
 
         dims = len(self.voxel_size)
 
-        assert dims == 3, "AddLocalShapeDescriptor only works on 3D volumes."
+        assert dims == 3, "AddLocalShapeDescriptor only works on 3D arrays."
 
-        segmentation_volume = batch.volumes[self.segmentation]
+        segmentation_array = batch.arrays[self.segmentation]
 
         # get voxel roi of requested descriptors -- this is the only region in
         # which we have to compute the descriptors
-        seg_roi = segmentation_volume.spec.roi
+        seg_roi = segmentation_array.spec.roi
         descriptor_roi = request[self.descriptor].roi
         voxel_roi_in_seg = (
             seg_roi.intersect(descriptor_roi) -
             seg_roi.get_offset())/self.voxel_size
 
         descriptor = self.__get_descriptors(
-            segmentation_volume.data,
+            segmentation_array.data,
             voxel_roi_in_seg)
 
-        # create descriptor volume
+        # create descriptor array
         descriptor_spec = self.spec[self.descriptor].copy()
         descriptor_spec.roi = request[self.descriptor].roi.copy()
-        descriptor_volume = Volume(descriptor, descriptor_spec)
+        descriptor_array = Array(descriptor, descriptor_spec)
 
-        # create mask volume
+        # create mask array
         if self.mask and self.mask in request:
-            channel_mask = (segmentation_volume.crop(descriptor_roi).data!=0).astype(np.float32)
+            channel_mask = (segmentation_array.crop(descriptor_roi).data!=0).astype(np.float32)
             assert channel_mask.shape[-3:] == descriptor.shape[-3:]
             mask = np.array([channel_mask]*descriptor.shape[0])
-            batch.volumes[self.mask] = Volume(mask, descriptor_spec.copy())
+            batch.arrays[self.mask] = Array(mask, descriptor_spec.copy())
 
         # crop segmentation back to original request
         seg_request_roi = request[self.segmentation].roi
-        cropped_segmentation_volume = segmentation_volume.crop(seg_request_roi)
+        cropped_segmentation_array = segmentation_array.crop(seg_request_roi)
 
-        batch.volumes[self.segmentation] = cropped_segmentation_volume
-        batch.volumes[self.descriptor] = descriptor_volume
+        batch.arrays[self.segmentation] = cropped_segmentation_array
+        batch.arrays[self.descriptor] = descriptor_array
 
     def __get_descriptors(self, segmentation, roi):
 
         roi_slices = roi.get_bounding_box()
 
-        # prepare full-res descriptor volumes for roi
+        # prepare full-res descriptor arrays for roi
         descriptors = np.zeros((10,) + roi.get_shape(), dtype=np.float32)
 
         # get sub-sampled shape, roi, voxel size and sigma
@@ -160,7 +160,7 @@ class AddLocalShapeDescriptor(BatchFilter):
         logger.debug("Downsampled voxel size: %s", sub_voxel_size)
         logger.debug("Sigma in voxels: %s", sub_sigma_voxel)
 
-        # prepare coords volume (reuse if we already have one)
+        # prepare coords array (reuse if we already have one)
         if (sub_shape, sub_voxel_size) not in self.coords:
 
             logger.debug("Create meshgrid...")
