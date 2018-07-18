@@ -1,4 +1,4 @@
-TAG="funkey/mala:v0.1-pre2"
+TAG="funkey/mala:v0.1-pre3"
 
 .PHONY: default push
 default:
