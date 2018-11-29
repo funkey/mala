@@ -62,7 +62,7 @@ def get_um_loss(mst, dist, gt_seg, alpha):
     # ouput.
     (loss, _, ratio_pos, ratio_neg, num_pairs_pos, num_pairs_neg) = mala.um_loss(
         mst,
-        gt_seg.flatten(),
+        gt_seg,
         alpha)
 
     return (
@@ -101,7 +101,7 @@ def get_um_loss_gradient(mst, dist, gt_seg, alpha):
     # ouput.
     (_, gradient, _, _, _, _) = mala.um_loss(
         mst,
-        gt_seg.flatten(),
+        gt_seg,
         alpha)
 
     return gradient.astype(np.float32)
@@ -125,6 +125,7 @@ def get_um_loss_gradient_op(
 def ultrametric_loss_op(
         embedding,
         gt_seg,
+        mask=None,
         alpha=0.1,
         add_coordinates=True,
         coordinate_scale=1.0,
@@ -144,6 +145,9 @@ def ultrametric_loss_op(
 
         gt_seg (Tensor, shape ``(d, h, w)``): The ground-truth labels of the
             points.
+
+        mask (optional, Tensor, shape ``(d, h, w)``): If given, consider only
+            points that are not zero in the mask.
 
         alpha (float): The margin term of the quadrupel loss.
 
@@ -199,6 +203,12 @@ def ultrametric_loss_op(
 
     embedding = tf.transpose(embedding, perm=[1, 2, 3, 0])
     embedding = tf.reshape(embedding, [depth*width*height, -1])
+    gt_seg = tf.reshape(gt_seg, [depth*width*height])
+
+    if mask is not None:
+        mask = tf.reshape(mask, [depth*width*height])
+        embedding = tf.boolean_mask(embedding, mask)
+        gt_seg = tf.boolean_mask(gt_seg, mask)
 
     # 3. Get the EMST on the embedding vectors.
 
