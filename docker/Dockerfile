@@ -15,3 +15,5 @@ ADD mala /src/mala/mala
 ADD setup.py /src/mala/
 WORKDIR /src/mala
 RUN python setup.py install
+
+RUN pip install mahotas
