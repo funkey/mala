@@ -163,7 +163,8 @@ def unet(
         activation='relu',
         layer=0,
         fov=(1, 1, 1),
-        voxel_size=(1, 1, 1)):
+        voxel_size=(1, 1, 1),
+        num_fmaps_out=None):
     '''Create a U-Net::
 
         f_in --> f_left --------------------------->> f_right--> f_out
@@ -238,6 +239,12 @@ def unet(
         voxel_size:
 
             Size of a voxel in the input data, in physical units
+
+        num_fmaps_out:
+
+            If given, specifies the number of output fmaps of the U-Net. Setting
+            this number ensures that the upper most layer, right side has at
+            least this number of fmaps.
     '''
 
     prefix = "    "*layer
@@ -318,6 +325,9 @@ def unet(
     f_right = tf.concat([f_left_cropped, g_out_upsampled], 1)
 
     print(prefix + "f_right: " + str(f_right.shape))
+
+    if layer == 0 and num_fmaps_out is not None:
+        num_fmaps = max(num_fmaps_out, num_fmaps)
 
     # convolve
     f_out, fov = conv_pass(
